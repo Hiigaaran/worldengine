@@ -17,6 +17,7 @@ use crate::ids::*;
 use crate::model::*;
 use crate::names;
 use crate::rng::{Rng, WorldRng};
+use crate::simulate;
 
 pub fn generate(config: &WorldConfig) -> World {
     let rng = WorldRng::new(config.seed);
@@ -32,22 +33,40 @@ pub fn generate(config: &WorldConfig) -> World {
         countries: Vec::new(),
         localities: Vec::new(),
         people: Vec::new(),
+        relations: Vec::new(),
+        wars: Vec::new(),
         events: Vec::new(),
     };
     found_countries(&mut world, &mut rng.stream("countries"));
     found_villages(&mut world, &mut rng.stream("villages"));
     create_people(&mut world, &mut rng.stream("people"));
+    init_relations(&mut world, &mut rng.stream("relations"));
     sort_events(&mut world);
+    simulate::run(&mut world, config.history_years);
     world
 }
 
-fn habitable(biome: Biome) -> bool {
+fn init_relations(world: &mut World, rng: &mut Rng) {
+    let n = world.countries.len() as u32;
+    for a in 0..n {
+        for b in a + 1..n {
+            world.relations.push(Relation {
+                a: CountryId(a),
+                b: CountryId(b),
+                opinion: rng.gen_range(-0.2..0.4),
+                allied: false,
+            });
+        }
+    }
+}
+
+pub(crate) fn habitable(biome: Biome) -> bool {
     !biome.is_water() && !matches!(biome, Biome::Mountain | Biome::Glacier)
 }
 
 /// Qué tan buen lugar es una casilla para asentarse: tierra fértil, agua dulce
 /// y acceso al mar, como en la historia real.
-fn site_score(map: &WorldMap, pos: Pos) -> f32 {
+pub(crate) fn site_score(map: &WorldMap, pos: Pos) -> f32 {
     let tile = map.tile(pos).unwrap();
     let mut score = match tile.biome {
         Biome::Grassland => 1.0,
@@ -74,7 +93,7 @@ fn site_score(map: &WorldMap, pos: Pos) -> f32 {
 
 /// Casillas habitables que cumplen `filter`, de mejor a peor sitio, con algo
 /// de azar para que no siempre gane la misma.
-fn best_sites(world: &World, rng: &mut Rng, filter: impl Fn(&Tile) -> bool) -> Vec<Pos> {
+pub(crate) fn best_sites(world: &World, rng: &mut Rng, filter: impl Fn(&Tile) -> bool) -> Vec<Pos> {
     let map = &world.map;
     let mut sites: Vec<(f32, Pos)> = (0..map.tiles.len())
         .filter(|&i| habitable(map.tiles[i].biome) && filter(&map.tiles[i]))
@@ -87,11 +106,11 @@ fn best_sites(world: &World, rng: &mut Rng, filter: impl Fn(&Tile) -> bool) -> V
     sites.into_iter().map(|(_, p)| p).collect()
 }
 
-fn distance2(a: Pos, b: Pos) -> u32 {
+pub(crate) fn distance2(a: Pos, b: Pos) -> u32 {
     a.x.abs_diff(b.x).pow(2) + a.y.abs_diff(b.y).pow(2)
 }
 
-fn push_event(world: &mut World, year: Year, kind: EventKind, location: Option<Pos>) {
+pub(crate) fn push_event(world: &mut World, year: Year, kind: EventKind, location: Option<Pos>) {
     let id = EventId(world.events.len() as u32);
     world.events.push(Event {
         id,
@@ -101,7 +120,7 @@ fn push_event(world: &mut World, year: Year, kind: EventKind, location: Option<P
     });
 }
 
-fn add_locality(
+pub(crate) fn add_locality(
     world: &mut World,
     rng: &mut Rng,
     pos: Pos,
@@ -123,6 +142,7 @@ fn add_locality(
         country,
         population,
         founded,
+        ruined: None,
     });
     push_event(
         world,
@@ -154,27 +174,10 @@ fn found_countries(world: &mut World, rng: &mut Rng) {
         let country = CountryId(i as u32);
         let founded = start - rng.gen_range(50..400);
         let capital = add_locality(world, rng, pos, LocalityKind::City, Some(country), founded);
-        let government = *[
-            Government::Monarchy,
-            Government::Republic,
-            Government::Theocracy,
-            Government::TribalCouncil,
-        ]
-        .choose(rng)
-        .unwrap();
-        world.countries.push(Country {
-            id: country,
-            name: names::word(rng, 2, 3),
-            government,
-            capital,
-            founded,
-            ruler: None,
-            color: [
-                rng.gen_range(60..230),
-                rng.gen_range(60..230),
-                rng.gen_range(60..230),
-            ],
-        });
+        let government = random_government(rng);
+        world
+            .countries
+            .push(new_country(rng, country, capital, founded, government));
         push_event(
             world,
             founded,
@@ -210,9 +213,44 @@ fn found_countries(world: &mut World, rng: &mut Rng) {
     }
 }
 
+pub(crate) fn random_government(rng: &mut Rng) -> Government {
+    *[
+        Government::Monarchy,
+        Government::Republic,
+        Government::Theocracy,
+        Government::TribalCouncil,
+    ]
+    .choose(rng)
+    .unwrap()
+}
+
+pub(crate) fn new_country(
+    rng: &mut Rng,
+    id: CountryId,
+    capital: LocalityId,
+    founded: Year,
+    government: Government,
+) -> Country {
+    Country {
+        id,
+        name: names::word(rng, 2, 3),
+        government,
+        capital,
+        founded,
+        ruler: None,
+        color: [
+            rng.gen_range(60..230),
+            rng.gen_range(60..230),
+            rng.gen_range(60..230),
+        ],
+        stability: 0.7,
+        fell: None,
+    }
+}
+
 /// Coste de extender el dominio a una casilla: las montañas, pantanos y
 /// desiertos frenan la expansión, así que las fronteras siguen el relieve.
-fn travel_cost(tile: &Tile) -> u32 {
+pub(crate) fn travel_cost(tile: &Tile) -> u32 {
     let base = match tile.biome {
         Biome::Grassland | Biome::Savanna => 10,
         Biome::Forest | Biome::Shrubland => 14,
@@ -295,7 +333,8 @@ fn create_people(world: &mut World, rng: &mut Rng) {
             .collect();
         let capital = world.countries[c].capital;
 
-        let ruler = add_person(world, rng, Role::Ruler, capital, Some(country));
+        let born = start - rng.gen_range(25..65);
+        let ruler = add_founder(world, rng, Role::Ruler, capital, Some(country), born);
         world.countries[c].ruler = Some(ruler);
         let crowned = (world.people[ruler.index()].born + rng.gen_range(18..40)).min(start);
         let pos = world.localities[capital.index()].pos;
@@ -320,7 +359,8 @@ fn create_people(world: &mut World, rng: &mut Rng) {
             .choose(rng)
             .unwrap();
             let home = *homes.choose(rng).unwrap();
-            add_person(world, rng, role, home, Some(country));
+            let born = start - rng.gen_range(18..70);
+            add_founder(world, rng, role, home, Some(country), born);
         }
     }
 
@@ -332,28 +372,61 @@ fn create_people(world: &mut World, rng: &mut Rng) {
         .map(|l| l.id)
         .collect();
     for home in free {
-        add_person(world, rng, Role::Adventurer, home, None);
+        let born = start - rng.gen_range(18..50);
+        add_founder(world, rng, Role::Adventurer, home, None, born);
     }
 }
 
-fn add_person(
+/// Crea un personaje sin registrar su nacimiento: quien llama decide cómo entra
+/// en la historia (nacimiento, ascenso, rebelión...).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn add_person(
     world: &mut World,
     rng: &mut Rng,
     role: Role,
     home: LocalityId,
     country: Option<CountryId>,
+    born: Year,
+    parent: Option<PersonId>,
 ) -> PersonId {
     let id = PersonId(world.people.len() as u32);
-    let born = world.config.start_year - rng.gen_range(18..70);
+    // Los hijos heredan el apellido de su progenitor.
+    let name = match parent {
+        Some(p) => {
+            let family = world.people[p.index()]
+                .name
+                .split(' ')
+                .next_back()
+                .unwrap_or("")
+                .to_string();
+            format!("{} {family}", names::word(rng, 1, 2))
+        }
+        None => names::person(rng),
+    };
     world.people.push(Person {
         id,
-        name: names::person(rng),
+        name,
         role,
         born,
         died: None,
         home,
         country,
+        parent,
+        cause_of_death: None,
     });
+    id
+}
+
+/// Personaje de la época de fundación, con su nacimiento en la historia.
+fn add_founder(
+    world: &mut World,
+    rng: &mut Rng,
+    role: Role,
+    home: LocalityId,
+    country: Option<CountryId>,
+    born: Year,
+) -> PersonId {
+    let id = add_person(world, rng, role, home, country, born, None);
     let pos = world.localities[home.index()].pos;
     push_event(world, born, EventKind::PersonBorn { person: id }, Some(pos));
     id

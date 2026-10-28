@@ -41,16 +41,28 @@ fn references_are_consistent() {
                 assert!(!tile.biome.is_water(), "el agua no tiene dueño");
             }
         }
-        for c in &w.countries {
+        for c in w.countries.iter().filter(|c| c.exists()) {
             let capital = w.locality(c.capital);
             assert_eq!(capital.country, Some(c.id));
             assert_eq!(w.map.tile(capital.pos).unwrap().owner, Some(c.id));
             let ruler = w.person(c.ruler.unwrap());
             assert_eq!(ruler.role, Role::Ruler);
+            assert!(ruler.alive_in(w.year), "{} sin gobernante vivo", c.name);
+            assert!((0.0..=1.0).contains(&c.stability));
+        }
+        for c in w.countries.iter().filter(|c| !c.exists()) {
+            assert_eq!(
+                w.territory_size(c.id),
+                0,
+                "{} cayó pero conserva tierras",
+                c.name
+            );
         }
         for p in &w.people {
-            assert!(p.alive_in(w.year));
-            assert_eq!(w.locality(p.home).country, p.country);
+            match p.died {
+                None => assert_eq!(w.locality(p.home).country, p.country),
+                Some(year) => assert!(p.born <= year && year <= w.year),
+            }
         }
         for r in &w.regions {
             assert_eq!(w.map.tile(r.center).unwrap().region, Some(r.id));
@@ -126,5 +138,77 @@ fn geography_is_varied() {
         biomes.sort_by_key(|b| *b as u8);
         biomes.dedup();
         assert!(biomes.len() >= 8, "solo {} biomas", biomes.len());
+    }
+}
+
+#[test]
+fn history_continues_deterministically() {
+    let config = WorldConfig {
+        seed: 5,
+        history_years: 120,
+        ..Default::default()
+    };
+    let mut short = generate(&WorldConfig {
+        history_years: 80,
+        ..config.clone()
+    });
+    simulate::run(&mut short, 40);
+    short.config.history_years = 120;
+    assert_eq!(short, generate(&config));
+}
+
+#[test]
+fn history_is_eventful() {
+    let worlds: Vec<World> = (0..5).map(world).collect();
+    let count = |f: &dyn Fn(&EventKind) -> bool| {
+        worlds
+            .iter()
+            .flat_map(|w| &w.events)
+            .filter(|e| f(&e.kind))
+            .count()
+    };
+    assert!(
+        count(&|k| matches!(k, EventKind::WarDeclared { .. })) > 0,
+        "sin guerras"
+    );
+    assert!(
+        count(&|k| matches!(k, EventKind::LocalityConquered { .. })) > 0,
+        "sin conquistas"
+    );
+    assert!(
+        count(&|k| matches!(k, EventKind::PersonDied { .. })) > 0,
+        "sin muertes"
+    );
+    assert!(
+        count(&|k| matches!(k, EventKind::LocalityGrew { .. })) > 0,
+        "sin crecimiento"
+    );
+    assert!(
+        count(&|k| matches!(k, EventKind::AllianceFormed { .. })) > 0,
+        "sin alianzas"
+    );
+    for w in &worlds {
+        assert_eq!(w.year, w.config.start_year + w.config.history_years as i32);
+        assert!(
+            w.countries.iter().any(|c| c.exists()),
+            "no queda ningún país"
+        );
+        // Los países fundados al inicio llevan siglos: han tenido sucesiones.
+        let founders = w
+            .countries
+            .iter()
+            .filter(|c| c.exists() && c.founded <= w.config.start_year);
+        for c in founders {
+            assert!(
+                w.rulers_of(c.id).len() >= 2,
+                "{} nunca cambió de gobernante",
+                c.name
+            );
+        }
+        for war in &w.wars {
+            if let Some(end) = war.ended {
+                assert!(war.started <= end);
+            }
+        }
     }
 }

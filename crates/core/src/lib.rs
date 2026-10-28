@@ -16,6 +16,7 @@ mod names;
 mod noise;
 pub mod query;
 pub mod rng;
+pub mod simulate;
 
 pub use generate::generate;
 pub use ids::*;

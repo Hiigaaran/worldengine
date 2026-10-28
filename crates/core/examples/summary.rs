@@ -25,17 +25,31 @@ fn main() {
         world.people.len(),
         world.events.len()
     );
-    for c in &world.countries {
+    let living = world.countries.iter().filter(|c| c.exists()).count();
+    let dead = world.people.iter().filter(|p| p.died.is_some()).count();
+    println!(
+        "{living} países en pie de {} · {} guerras · {dead} personajes muertos",
+        world.countries.len(),
+        world.wars.len()
+    );
+    for c in world.countries.iter().filter(|c| c.exists()) {
         println!(
-            "  {} ({}), capital {}, {} casillas",
+            "  {} ({}), capital {}, {} casillas, {} gobernantes",
             c.name,
             c.government.name(),
             world.locality(c.capital).name,
-            world.territory_size(c.id)
+            world.territory_size(c.id),
+            world.rulers_of(c.id).len()
         );
     }
-    println!("Últimos eventos:");
-    for e in world.events.iter().rev().take(5) {
+    println!("Últimos eventos importantes:");
+    for e in world
+        .events
+        .iter()
+        .rev()
+        .filter(|e| world.is_major(e))
+        .take(15)
+    {
         println!("  año {}: {}", e.year, world.describe(e));
     }
 }

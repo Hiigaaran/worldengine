@@ -35,4 +35,6 @@ define_id!(
     PersonId,
     /// Evento histórico.
     EventId,
+    /// Guerra entre dos países.
+    WarId,
 );

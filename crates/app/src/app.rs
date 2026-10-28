@@ -1,14 +1,16 @@
 use eframe::egui;
-use worldengine_core::{generate, rng, Pos, World, WorldConfig};
+use worldengine_core::{generate, rng, simulate, Pos, World, WorldConfig};
 
+use crate::details::{self, Nav};
 use crate::map_view::{MapMode, MapView};
-use crate::{details, timeline};
+use crate::timeline::Timeline;
 
 pub struct App {
     seed_text: String,
     config: WorldConfig,
     world: World,
     map: MapView,
+    timeline: Timeline,
     /// Casilla seleccionada en el mapa; todo el panel de detalles parte de aquí.
     selected: Option<Pos>,
     status: String,
@@ -22,6 +24,7 @@ impl Default for App {
             world: generate(&config),
             config,
             map: MapView::default(),
+            timeline: Timeline::default(),
             selected: None,
             status: String::new(),
         }
@@ -35,6 +38,15 @@ impl App {
         self.map.invalidate();
         self.selected = None;
         self.status = format!("Mundo «{}» generado", self.world.name);
+    }
+
+    fn advance(&mut self, years: u32) {
+        simulate::run(&mut self.world, years);
+        self.map.refresh();
+        self.status = format!(
+            "Simulados {years} años más: ahora es el año {}",
+            self.world.year
+        );
     }
 
     fn export_json(&mut self) {
@@ -58,6 +70,19 @@ impl App {
             }
             ui.add(egui::Slider::new(&mut self.config.countries, 1..=16).text("países"));
             ui.add(egui::Slider::new(&mut self.config.sea_level, 0.2..=0.8).text("agua"));
+            ui.add(
+                egui::Slider::new(&mut self.config.history_years, 0..=1000)
+                    .text("años de historia"),
+            );
+        });
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(format!("Año {}", self.world.year)).strong());
+            if ui.button("Simular +10 años").clicked() {
+                self.advance(10);
+            }
+            if ui.button("Simular +50 años").clicked() {
+                self.advance(50);
+            }
             ui.separator();
             ui.label("Mapa:");
             for mode in MapMode::ALL {
@@ -85,7 +110,7 @@ impl eframe::App for App {
             .resizable(true)
             .default_height(200.0)
             .show(ctx, |ui| {
-                if let Some(pos) = timeline::show(ui, &self.world, self.selected) {
+                if let Some(pos) = self.timeline.show(ui, &self.world, self.selected) {
                     self.selected = Some(pos);
                     self.map.center_on(pos);
                 }
@@ -95,9 +120,13 @@ impl eframe::App for App {
             .resizable(true)
             .default_width(340.0)
             .show(ctx, |ui| {
-                if let Some(pos) = details::show(ui, &self.world, self.selected) {
-                    self.selected = Some(pos);
-                    self.map.center_on(pos);
+                match details::show(ui, &self.world, self.selected) {
+                    Some(Nav::GoTo(pos)) => {
+                        self.selected = Some(pos);
+                        self.map.center_on(pos);
+                    }
+                    Some(Nav::Overview) => self.selected = None,
+                    None => {}
                 }
             });
 

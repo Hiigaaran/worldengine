@@ -26,6 +26,8 @@ pub struct WorldConfig {
     pub sea_level: f32,
     pub countries: u32,
     pub start_year: Year,
+    /// Años de historia que se simulan tras la fundación del mundo.
+    pub history_years: u32,
 }
 
 impl Default for WorldConfig {
@@ -37,6 +39,7 @@ impl Default for WorldConfig {
             sea_level: 0.45,
             countries: 6,
             start_year: 0,
+            history_years: 250,
         }
     }
 }
@@ -242,6 +245,17 @@ pub struct Country {
     pub ruler: Option<PersonId>,
     /// Color en formato RGB para el mapa político.
     pub color: [u8; 3],
+    /// Cohesión interna (0 a 1): baja con guerras, pestes y sucesiones; si cae
+    /// mucho, las provincias lejanas se rebelan.
+    pub stability: f32,
+    /// Año en que el país desapareció, si lo hizo.
+    pub fell: Option<Year>,
+}
+
+impl Country {
+    pub fn exists(&self) -> bool {
+        self.fell.is_none()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -270,6 +284,8 @@ pub struct Locality {
     pub country: Option<CountryId>,
     pub population: u32,
     pub founded: Year,
+    /// Año en que quedó en ruinas (despoblada), si ocurrió.
+    pub ruined: Option<Year>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -306,6 +322,56 @@ pub struct Person {
     pub died: Option<Year>,
     pub home: LocalityId,
     pub country: Option<CountryId>,
+    /// Progenitor notable, para seguir linajes y dinastías.
+    pub parent: Option<PersonId>,
+    pub cause_of_death: Option<DeathCause>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DeathCause {
+    OldAge,
+    Illness,
+    Battle,
+    Assassination,
+    Plague,
+}
+
+impl DeathCause {
+    pub fn name(self) -> &'static str {
+        match self {
+            DeathCause::OldAge => "de vejez",
+            DeathCause::Illness => "por enfermedad",
+            DeathCause::Battle => "en batalla",
+            DeathCause::Assassination => "asesinado",
+            DeathCause::Plague => "por la peste",
+        }
+    }
+}
+
+/// Relación entre dos países. Se guarda una por par, con `a < b`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Relation {
+    pub a: CountryId,
+    pub b: CountryId,
+    /// De -1 (enemistad) a 1 (amistad).
+    pub opinion: f32,
+    pub allied: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct War {
+    pub id: WarId,
+    pub name: String,
+    pub attacker: CountryId,
+    pub defender: CountryId,
+    pub started: Year,
+    pub ended: Option<Year>,
+    /// Ganador al firmar la paz; `None` si acabó en tablas.
+    pub winner: Option<CountryId>,
+    /// Localidades que cambiaron de manos durante la guerra.
+    pub conquests: Vec<LocalityId>,
+    /// Cansancio acumulado; al superar 1 se firma la paz.
+    pub exhaustion: f32,
 }
 
 impl Person {
@@ -325,9 +391,72 @@ pub enum EventKind {
     PersonBorn {
         person: PersonId,
     },
+    /// Un personaje adulto se vuelve notable (entra en la historia).
+    PersonRose {
+        person: PersonId,
+    },
     RulerCrowned {
         person: PersonId,
         country: CountryId,
+    },
+    PersonDied {
+        person: PersonId,
+        cause: DeathCause,
+    },
+    LocalityGrew {
+        locality: LocalityId,
+        kind: LocalityKind,
+    },
+    LocalityRuined {
+        locality: LocalityId,
+    },
+    /// Una localidad independiente se une a un país.
+    LocalityAnnexed {
+        locality: LocalityId,
+        country: CountryId,
+    },
+    AllianceFormed {
+        a: CountryId,
+        b: CountryId,
+    },
+    AllianceBroken {
+        a: CountryId,
+        b: CountryId,
+    },
+    WarDeclared {
+        war: WarId,
+    },
+    Battle {
+        war: WarId,
+        locality: LocalityId,
+        winner: CountryId,
+        loser: CountryId,
+    },
+    LocalityConquered {
+        war: WarId,
+        locality: LocalityId,
+        from: CountryId,
+        to: CountryId,
+    },
+    PeaceSigned {
+        war: WarId,
+    },
+    CapitalMoved {
+        country: CountryId,
+        locality: LocalityId,
+    },
+    CountryFell {
+        country: CountryId,
+        conqueror: Option<CountryId>,
+    },
+    Independence {
+        locality: LocalityId,
+        from: CountryId,
+        country: CountryId,
+    },
+    Plague {
+        country: CountryId,
+        deaths: u32,
     },
 }
 
@@ -353,5 +482,7 @@ pub struct World {
     pub countries: Vec<Country>,
     pub localities: Vec<Locality>,
     pub people: Vec<Person>,
+    pub relations: Vec<Relation>,
+    pub wars: Vec<War>,
     pub events: Vec<Event>,
 }

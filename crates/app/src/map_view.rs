@@ -67,6 +67,11 @@ impl MapView {
         self.zoom = 1.0;
     }
 
+    /// Vuelve a pintar el mapa (tras simular) sin mover la vista.
+    pub fn refresh(&mut self) {
+        self.texture = None;
+    }
+
     pub fn set_mode(&mut self, mode: MapMode) {
         if self.mode != mode {
             self.mode = mode;
@@ -196,27 +201,53 @@ impl MapView {
             }
         }
 
+        let scale = (px / 6.0).clamp(1.0, 2.0);
         for locality in &world.localities {
             let p = to_screen(locality.pos.x as f32 + 0.5, locality.pos.y as f32 + 0.5);
+            if locality.ruined.is_some() {
+                // Ruinas: una cruz gris, visible solo de cerca.
+                if px >= 6.0 {
+                    let d = Vec2::splat(2.5 * scale);
+                    let stroke = Stroke::new(1.5_f32, Color32::from_gray(90));
+                    painter.line_segment([p - d, p + d], stroke);
+                    painter
+                        .line_segment([p + Vec2::new(d.x, -d.y), p + Vec2::new(-d.x, d.y)], stroke);
+                }
+                continue;
+            }
+            let is_capital = locality
+                .country
+                .is_some_and(|c| world.country(c).capital == locality.id);
             let radius = match locality.kind {
                 LocalityKind::Village => 2.0,
                 LocalityKind::Town => 3.0,
                 LocalityKind::City => 4.5,
-            } * (px / 6.0).clamp(1.0, 2.0);
+            } * scale;
+            if is_capital {
+                painter.circle_stroke(
+                    p,
+                    radius + 2.5,
+                    Stroke::new(1.5_f32, Color32::from_rgb(250, 210, 90)),
+                );
+            }
             painter.circle(
                 p,
                 radius,
                 Color32::from_rgb(240, 230, 200),
                 Stroke::new(1.0_f32, Color32::BLACK),
             );
-            let show_name = px >= 8.0 || (locality.kind == LocalityKind::City && px >= 3.0);
-            if show_name {
+            let show_name = match locality.kind {
+                LocalityKind::City => px >= 3.0,
+                LocalityKind::Town => px >= 6.0,
+                LocalityKind::Village => px >= 10.0,
+            };
+            if show_name || is_capital {
                 label(p - Vec2::new(0.0, radius + 1.0), &locality.name, 13.0);
             }
         }
 
         if self.mode == MapMode::Political {
-            for country in &world.countries {
+            for country in world.countries.iter().filter(|c| c.exists()) {
                 let capital = world.locality(country.capital).pos;
                 let p = to_screen(capital.x as f32 + 0.5, capital.y as f32 + 0.5);
                 label(p + Vec2::new(0.0, 22.0), &country.name.to_uppercase(), 15.0);

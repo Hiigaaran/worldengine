@@ -67,6 +67,28 @@ buscan tierra fértil junto a ríos, lagos y costas; los países se expanden des
 su capital y las montañas, desiertos y ríos frenan la expansión, así que las
 fronteras siguen el relieve.
 
+**Historia** (`crates/core/src/simulate.rs`): tras la fundación se simulan
+`history_years` años (250 por defecto), uno a uno:
+
+- Las localidades crecen según la riqueza de su entorno; las aldeas se hacen
+  pueblos y ciudades, y las despobladas quedan en ruinas.
+- Los países ensanchan sus fronteras, fundan aldeas y absorben las aldeas
+  independientes que alcanzan.
+- Los personajes envejecen y mueren (de vejez, enfermedad, en batalla,
+  asesinados o por la peste). Los gobernantes tienen herederos y la sucesión
+  depende del gobierno: herencia en monarquías, elección en repúblicas, el
+  sacerdote mayor en teocracias y un caudillo en consejos tribales.
+- Los vecinos acumulan tensiones; se sellan y rompen alianzas y estallan
+  guerras con nombre, que se libran batalla a batalla: se conquistan
+  localidades, se trasladan capitales y caen países.
+- Los imperios grandes o castigados por guerras y pestes pierden estabilidad,
+  y sus provincias lejanas se rebelan y fundan nuevos países.
+
+Cada año usa su propio flujo aleatorio: simular 100 años y luego 50 más da
+exactamente el mismo mundo que simular 150 de una vez. En la app, **Simular +10
+/ +50 años** continúa la historia, y la línea de tiempo se puede filtrar (solo
+grandes hechos) y buscar por nombre.
+
 ## Plan
 
 1. **Base y modelo de datos.** Workspace, modelo, semilla reproducible, mundo de
@@ -75,6 +97,7 @@ fronteras siguen el relieve.
    15 biomas, regiones con nombre y mapa con relieve, capas y zoom con más
    detalle. *(hecho)*
 3. **Civilizaciones e historia.** Simulación año a año: crecimiento, fundaciones,
-   guerras, alianzas, sucesiones y muertes; territorios que cambian.
+   guerras, alianzas, sucesiones, rebeliones, pestes y muertes; territorios que
+   cambian. *(hecho)*
 4. **Modo Leyendas.** Línea de tiempo deslizable que muestra el mapa en cada año,
    búsqueda de personajes, sitios y eventos, y exportación a crónica en texto.

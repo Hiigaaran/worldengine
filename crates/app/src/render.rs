@@ -195,7 +195,8 @@ fn political(
         if x < 0 || y < 0 || x >= map.width as i64 || y >= map.height as i64 {
             return false;
         }
-        map.tiles[y as usize * map.width as usize + x as usize].owner != tile.owner
+        let other = &map.tiles[y as usize * map.width as usize + x as usize];
+        !other.biome.is_water() && other.owner != tile.owner
     };
     let edge = (sx == 0 && differs(-1, 0))
         || (sx == SUBPIXELS - 1 && differs(1, 0))
