@@ -1,23 +1,43 @@
 //! Mapa del mundo con zoom (rueda), desplazamiento (arrastrar) y selección (clic).
 
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, TextureHandle, Vec2};
-use worldengine_core::{Biome, LocalityKind, Pos, World};
+use worldengine_core::{LocalityKind, Pos, World};
+
+use crate::render::render;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapMode {
     Physical,
     Political,
+    Elevation,
+    Temperature,
+    Rainfall,
 }
 
 impl MapMode {
-    pub const ALL: [MapMode; 2] = [MapMode::Physical, MapMode::Political];
+    pub const ALL: [MapMode; 5] = [
+        MapMode::Physical,
+        MapMode::Political,
+        MapMode::Elevation,
+        MapMode::Temperature,
+        MapMode::Rainfall,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             MapMode::Physical => "Físico",
             MapMode::Political => "Político",
+            MapMode::Elevation => "Elevación",
+            MapMode::Temperature => "Temperatura",
+            MapMode::Rainfall => "Lluvia",
         }
     }
+}
+
+/// Caudal mínimo para dibujar un río, según el zoom: de lejos solo se ven los
+/// grandes; al acercarse aparecen los afluentes.
+fn min_visible_flow(px: f32) -> f32 {
+    (600.0 / px.max(1.0)).clamp(30.0, 300.0)
 }
 
 pub struct MapView {
@@ -76,7 +96,7 @@ impl MapView {
             if scroll != 0.0 {
                 // Zoom manteniendo fija la casilla bajo el cursor.
                 let under_cursor = *center + (cursor - rect.center()) / px;
-                self.zoom = (self.zoom * (scroll * 0.003).exp()).clamp(1.0, 48.0);
+                self.zoom = (self.zoom * (scroll * 0.003).exp()).clamp(1.0, 24.0);
                 px = fit * self.zoom;
                 *center = under_cursor - (cursor - rect.center()) / px;
             }
@@ -99,7 +119,7 @@ impl MapView {
             ui.ctx().load_texture(
                 "world-map",
                 render(world, self.mode),
-                egui::TextureOptions::NEAREST,
+                egui::TextureOptions::LINEAR,
             )
         });
         let uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
@@ -109,6 +129,37 @@ impl MapView {
             uv,
             Color32::WHITE,
         );
+
+        // Ríos: un trazo por tramo, más ancho cuanto más caudal lleva.
+        let view = rect.expand(px * 2.0);
+        let min_flow = min_visible_flow(px);
+        let river_color = Color32::from_rgb(70, 130, 200);
+        let river_text = Color32::from_rgb(185, 220, 255);
+        let mut river_labels = Vec::new();
+        for river in &world.rivers {
+            if river.discharge < min_flow {
+                continue;
+            }
+            let center = |p: Pos| to_screen(p.x as f32 + 0.5, p.y as f32 + 0.5);
+            let points: Vec<(Pos2, f32)> = river
+                .path
+                .iter()
+                .map(|&p| (center(p), world.map.tile(p).unwrap().flow))
+                .chain(std::iter::once((center(river.mouth), river.discharge)))
+                .collect();
+            let points = smooth(&smooth(&points));
+            for pair in points.windows(2) {
+                let ((a, _), (b, flow)) = (pair[0], pair[1]);
+                if flow < min_flow || !(view.contains(a) || view.contains(b)) {
+                    continue;
+                }
+                let width = ((flow / 30.0).ln() * 0.6 + 0.8) * (px / 8.0).clamp(0.6, 3.0);
+                painter.line_segment([a, b], Stroke::new(width, river_color));
+            }
+            if px >= 10.0 && river.path.len() >= 6 {
+                river_labels.push((center(river.path[river.path.len() / 2]), &river.name));
+            }
+        }
 
         let text_color = ui.visuals().strong_text_color();
         let shadow = Color32::from_black_alpha(180);
@@ -124,8 +175,22 @@ impl MapView {
             painter.text(pos, Align2::CENTER_BOTTOM, text, font, text_color);
         };
 
-        if self.mode == MapMode::Physical && px >= 5.0 {
-            for region in world.regions.iter().filter(|r| r.area >= 40) {
+        for (p, name) in river_labels {
+            let font = FontId::proportional(11.0);
+            painter.text(
+                p + Vec2::splat(1.0),
+                Align2::CENTER_CENTER,
+                name,
+                font.clone(),
+                shadow,
+            );
+            painter.text(p, Align2::CENTER_CENTER, name, font, river_text);
+        }
+
+        if self.mode == MapMode::Physical && px >= 3.0 {
+            // Al acercarse se nombran también las regiones pequeñas.
+            let min_area = (4000.0 / (px * px)).clamp(12.0, 200.0) as u32;
+            for region in world.regions.iter().filter(|r| r.area >= min_area) {
                 let p = to_screen(region.center.x as f32 + 0.5, region.center.y as f32 + 0.5);
                 label(p, &region.name, 12.0);
             }
@@ -172,6 +237,9 @@ impl MapView {
             if let Some(region) = tile.region {
                 text += &format!(" · {}", world.region(region).name);
             }
+            if let Some(river) = tile.river {
+                text += &format!(" · {}", world.river(river).name);
+            }
             if let Some(owner) = tile.owner {
                 text += &format!(" · {}", world.country(owner).name);
             }
@@ -199,50 +267,18 @@ impl MapView {
     }
 }
 
-fn biome_color(biome: Biome) -> [u8; 3] {
-    match biome {
-        Biome::Ocean => [28, 58, 110],
-        Biome::Coast => [52, 100, 160],
-        Biome::Desert => [214, 190, 130],
-        Biome::Grassland => [130, 175, 85],
-        Biome::Forest => [52, 120, 60],
-        Biome::Jungle => [30, 95, 45],
-        Biome::Tundra => [160, 165, 140],
-        Biome::Mountain => [125, 110, 100],
-        Biome::Glacier => [230, 238, 245],
+/// Suavizado de Chaikin: recorta las esquinas del trazo de un río. Conserva los
+/// extremos para que el río siga naciendo y desembocando en el mismo sitio.
+fn smooth(points: &[(Pos2, f32)]) -> Vec<(Pos2, f32)> {
+    if points.len() < 3 {
+        return points.to_vec();
     }
-}
-
-fn render(world: &World, mode: MapMode) -> egui::ColorImage {
-    let map = &world.map;
-    let mut pixels = Vec::with_capacity(map.tiles.len());
-    for (i, tile) in map.tiles.iter().enumerate() {
-        let base = biome_color(tile.biome);
-        // Sombreado por elevación para dar relieve.
-        let shade = if tile.biome.is_water() {
-            0.75 + tile.elevation * 0.6
-        } else {
-            0.8 + (tile.elevation - 0.4) * 0.6
-        };
-        let mut rgb = base.map(|c| (c as f32 * shade).min(255.0));
-        if mode == MapMode::Political {
-            let gray = (rgb[0] + rgb[1] + rgb[2]) / 3.0;
-            rgb = [gray, gray, gray];
-            if let Some(owner) = tile.owner {
-                let color = world.country(owner).color;
-                let border = map
-                    .neighbors(map.pos(i))
-                    .any(|n| map.tile(n).unwrap().owner != tile.owner);
-                let mix = if border { 0.95 } else { 0.55 };
-                for k in 0..3 {
-                    rgb[k] = rgb[k] * (1.0 - mix) + color[k] as f32 * mix;
-                }
-            }
-        }
-        pixels.push(Color32::from_rgb(rgb[0] as u8, rgb[1] as u8, rgb[2] as u8));
+    let mut out = vec![points[0]];
+    for pair in points.windows(2) {
+        let ((a, fa), (b, fb)) = (pair[0], pair[1]);
+        out.push((a.lerp(b, 0.25), fa * 0.75 + fb * 0.25));
+        out.push((a.lerp(b, 0.75), fa * 0.25 + fb * 0.75));
     }
-    egui::ColorImage {
-        size: [map.width as usize, map.height as usize],
-        pixels,
-    }
+    out.push(points[points.len() - 1]);
+    out
 }

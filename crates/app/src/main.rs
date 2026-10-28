@@ -3,6 +3,7 @@
 mod app;
 mod details;
 mod map_view;
+mod render;
 mod timeline;
 
 fn main() -> eframe::Result {

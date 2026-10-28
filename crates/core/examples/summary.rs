@@ -17,8 +17,9 @@ fn main() {
         world.name, world.year
     );
     println!(
-        "{} regiones, {} países, {} localidades, {} personajes, {} eventos",
+        "{} regiones, {} ríos, {} países, {} localidades, {} personajes, {} eventos",
         world.regions.len(),
+        world.rivers.len(),
         world.countries.len(),
         world.localities.len(),
         world.people.len(),

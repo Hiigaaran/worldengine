@@ -30,6 +30,10 @@ impl World {
         &self.regions[id.index()]
     }
 
+    pub fn river(&self, id: RiverId) -> &River {
+        &self.rivers[id.index()]
+    }
+
     pub fn country(&self, id: CountryId) -> &Country {
         &self.countries[id.index()]
     }

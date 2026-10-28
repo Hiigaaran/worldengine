@@ -1,5 +1,5 @@
-//! Ruido de valores fractal, suficiente para un terreno de prueba.
-//! El paso 2 (geografía) lo reemplazará por algo más rico: placas, erosión y ríos.
+//! Ruido de valores fractal: el detalle fino del terreno y del clima. La forma
+//! general de los continentes la dan las placas (ver [`crate::geography`]).
 
 use rand::Rng as _;
 
@@ -36,6 +36,19 @@ impl ValueNoise {
         let (mut total, mut amplitude, mut frequency, mut norm) = (0.0, 1.0, 1.0, 0.0);
         for _ in 0..octaves {
             total += self.sample(x * frequency, y * frequency) * amplitude;
+            norm += amplitude;
+            amplitude *= 0.5;
+            frequency *= 2.0;
+        }
+        total / norm
+    }
+
+    /// Ruido "en cresta": líneas agudas, útil para cordilleras. En [0, 1].
+    pub fn ridged(&self, x: f32, y: f32, octaves: u32) -> f32 {
+        let (mut total, mut amplitude, mut frequency, mut norm) = (0.0, 1.0, 1.0, 0.0);
+        for _ in 0..octaves {
+            let n = 1.0 - (self.sample(x * frequency, y * frequency) * 2.0 - 1.0).abs();
+            total += n * n * amplitude;
             norm += amplitude;
             amplitude *= 0.5;
             frequency *= 2.0;

@@ -32,8 +32,8 @@ impl Default for WorldConfig {
     fn default() -> Self {
         Self {
             seed: 1,
-            width: 160,
-            height: 100,
+            width: 256,
+            height: 160,
             sea_level: 0.45,
             countries: 6,
             start_year: 0,
@@ -45,17 +45,45 @@ impl Default for WorldConfig {
 pub enum Biome {
     Ocean,
     Coast,
+    Lake,
     Desert,
+    Shrubland,
     Grassland,
+    Savanna,
     Forest,
     Jungle,
+    Swamp,
+    Taiga,
     Tundra,
+    Hills,
     Mountain,
     Glacier,
 }
 
 impl Biome {
+    pub const ALL: [Biome; 15] = [
+        Biome::Ocean,
+        Biome::Coast,
+        Biome::Lake,
+        Biome::Desert,
+        Biome::Shrubland,
+        Biome::Grassland,
+        Biome::Savanna,
+        Biome::Forest,
+        Biome::Jungle,
+        Biome::Swamp,
+        Biome::Taiga,
+        Biome::Tundra,
+        Biome::Hills,
+        Biome::Mountain,
+        Biome::Glacier,
+    ];
+
     pub fn is_water(self) -> bool {
+        matches!(self, Biome::Ocean | Biome::Coast | Biome::Lake)
+    }
+
+    pub fn is_sea(self) -> bool {
         matches!(self, Biome::Ocean | Biome::Coast)
     }
 
@@ -63,11 +91,17 @@ impl Biome {
         match self {
             Biome::Ocean => "Océano",
             Biome::Coast => "Costa",
+            Biome::Lake => "Lago",
             Biome::Desert => "Desierto",
+            Biome::Shrubland => "Matorral",
             Biome::Grassland => "Pradera",
+            Biome::Savanna => "Sabana",
             Biome::Forest => "Bosque",
             Biome::Jungle => "Selva",
+            Biome::Swamp => "Pantano",
+            Biome::Taiga => "Taiga",
             Biome::Tundra => "Tundra",
+            Biome::Hills => "Colinas",
             Biome::Mountain => "Montaña",
             Biome::Glacier => "Glaciar",
         }
@@ -84,6 +118,9 @@ pub struct Tile {
     /// 0.0 = árido, 1.0 = muy lluvioso.
     pub rainfall: f32,
     pub biome: Biome,
+    /// Agua que pasa por la casilla: la lluvia de toda su cuenca aguas arriba.
+    pub flow: f32,
+    pub river: Option<RiverId>,
     pub region: Option<RegionId>,
     pub owner: Option<CountryId>,
 }
@@ -113,6 +150,30 @@ impl WorldMap {
         (pos.x < self.width && pos.y < self.height).then(|| &self.tiles[self.index(pos)])
     }
 
+    /// Los ocho vecinos (ortogonales y diagonales) dentro del mapa.
+    pub fn neighbors8(&self, pos: Pos) -> impl Iterator<Item = Pos> + '_ {
+        const DIRS: [(i32, i32); 8] = [
+            (1, 0),
+            (-1, 0),
+            (0, 1),
+            (0, -1),
+            (1, 1),
+            (1, -1),
+            (-1, 1),
+            (-1, -1),
+        ];
+        DIRS.iter().filter_map(move |(dx, dy)| {
+            let x = pos.x as i32 + dx;
+            let y = pos.y as i32 + dy;
+            (x >= 0 && y >= 0 && (x as u32) < self.width && (y as u32) < self.height).then_some(
+                Pos {
+                    x: x as u32,
+                    y: y as u32,
+                },
+            )
+        })
+    }
+
     /// Vecinos ortogonales dentro del mapa.
     pub fn neighbors(&self, pos: Pos) -> impl Iterator<Item = Pos> + '_ {
         const DIRS: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
@@ -137,6 +198,19 @@ pub struct Region {
     pub area: u32,
     /// Casilla representativa, donde se dibuja la etiqueta.
     pub center: Pos,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct River {
+    pub id: RiverId,
+    pub name: String,
+    /// Casillas desde el nacimiento hasta la última antes de la desembocadura.
+    pub path: Vec<Pos>,
+    /// Donde vierte sus aguas: el mar, un lago o el río del que es afluente.
+    pub mouth: Pos,
+    pub flows_into: Option<RiverId>,
+    /// Caudal en la desembocadura.
+    pub discharge: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -275,6 +349,7 @@ pub struct World {
     pub year: Year,
     pub map: WorldMap,
     pub regions: Vec<Region>,
+    pub rivers: Vec<River>,
     pub countries: Vec<Country>,
     pub localities: Vec<Locality>,
     pub people: Vec<Person>,

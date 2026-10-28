@@ -9,6 +9,7 @@
 //! ```
 
 pub mod generate;
+pub mod geography;
 pub mod ids;
 pub mod model;
 mod names;

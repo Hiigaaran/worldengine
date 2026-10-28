@@ -11,8 +11,9 @@ pub fn show(ui: &mut egui::Ui, world: &World, selected: Option<Pos>) -> Option<P
         ui.heading(&world.name);
         ui.label(format!("Año {}", world.year));
         ui.label(format!(
-            "{} regiones · {} países · {} localidades · {} personajes",
+            "{} regiones · {} ríos · {} países · {} localidades · {} personajes",
             world.regions.len(),
+            world.rivers.len(),
             world.countries.len(),
             world.localities.len(),
             world.people.len()
@@ -51,6 +52,37 @@ pub fn show(ui: &mut egui::Ui, world: &World, selected: Option<Pos>) -> Option<P
             ui.label(format!("{:.0}%", tile.rainfall * 100.0));
             ui.end_row();
         });
+
+        if let Some(river) = tile.river.map(|r| world.river(r)) {
+            ui.separator();
+            ui.strong(river.name.as_str());
+            ui.label(format!(
+                "{} casillas de largo · caudal {:.0}",
+                river.path.len(),
+                river.discharge
+            ));
+            let source = river.path[0];
+            if ui.link("Ir al nacimiento").clicked() {
+                go_to = Some(source);
+            }
+            match river.flows_into.map(|r| world.river(r)) {
+                Some(main) => {
+                    if ui.link(format!("Afluente del {}", main.name)).clicked() {
+                        go_to = Some(river.mouth);
+                    }
+                }
+                None => {
+                    let into = world.map.tile(river.mouth).map(|t| t.biome);
+                    let label = match into {
+                        Some(worldengine_core::Biome::Lake) => "Desemboca en un lago",
+                        _ => "Desemboca en el mar",
+                    };
+                    if ui.link(label).clicked() {
+                        go_to = Some(river.mouth);
+                    }
+                }
+            }
+        }
 
         if let Some(region) = tile.region.map(|r| world.region(r)) {
             ui.separator();

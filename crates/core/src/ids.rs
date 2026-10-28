@@ -25,6 +25,8 @@ macro_rules! define_id {
 define_id!(
     /// Región geográfica (zona continua con un bioma dominante).
     RegionId,
+    /// Río o afluente.
+    RiverId,
     /// País o entidad política.
     CountryId,
     /// Localidad: aldea, pueblo o ciudad.

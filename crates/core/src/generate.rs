@@ -1,39 +1,34 @@
-//! Generación de un mundo por etapas, al estilo de Dwarf Fortress:
-//! terreno → biomas → regiones → países y localidades → personajes → eventos.
+//! Generación de un mundo por etapas, al estilo de Dwarf Fortress: primero la
+//! geografía física (ver [`crate::geography`]) y luego, sobre ella, países y
+//! localidades → personajes → eventos.
 //!
 //! Cada etapa usa su propio flujo aleatorio (ver [`crate::rng`]). Por ahora la
 //! historia previa al año de inicio es solo un registro de fundaciones; la
 //! simulación año a año llega en el paso 3.
 
-use std::collections::VecDeque;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 
 use rand::seq::SliceRandom;
 use rand::Rng as _;
 
+use crate::geography;
 use crate::ids::*;
 use crate::model::*;
 use crate::names;
-use crate::noise::ValueNoise;
 use crate::rng::{Rng, WorldRng};
-
-/// Elevación que separa el mar de la tierra firme.
-pub const SEA_LEVEL: f32 = 0.4;
-
-/// Las regiones más pequeñas que esto se funden con una vecina.
-const MIN_REGION_AREA: u32 = 6;
 
 pub fn generate(config: &WorldConfig) -> World {
     let rng = WorldRng::new(config.seed);
-    let mut map = terrain(config, &mut rng.stream("terrain"));
-    assign_biomes(&mut map);
-    let regions = build_regions(&mut map, &mut rng.stream("regions"));
+    let geography = geography::build(config, &rng);
 
     let mut world = World {
         config: config.clone(),
         name: names::word(&mut rng.stream("world-name"), 2, 3),
         year: config.start_year,
-        map,
-        regions,
+        map: geography.map,
+        regions: geography.regions,
+        rivers: geography.rivers,
         countries: Vec::new(),
         localities: Vec::new(),
         people: Vec::new(),
@@ -46,231 +41,50 @@ pub fn generate(config: &WorldConfig) -> World {
     world
 }
 
-fn terrain(config: &WorldConfig, rng: &mut Rng) -> WorldMap {
-    let (w, h) = (config.width, config.height);
-    let elevation_noise = ValueNoise::new(rng, 64);
-    let rain_noise = ValueNoise::new(rng, 64);
-    let temp_noise = ValueNoise::new(rng, 64);
+fn habitable(biome: Biome) -> bool {
+    !biome.is_water() && !matches!(biome, Biome::Mountain | Biome::Glacier)
+}
 
-    let scale = 6.0 / w.max(h) as f32;
-    let mut raw: Vec<f32> = Vec::with_capacity((w * h) as usize);
-    for y in 0..h {
-        for x in 0..w {
-            let (fx, fy) = (x as f32 * scale, y as f32 * scale);
-            // Hundir los bordes para que los continentes queden dentro del mapa.
-            let dx = x as f32 / w as f32 * 2.0 - 1.0;
-            let dy = y as f32 / h as f32 * 2.0 - 1.0;
-            let edge = (dx * dx + dy * dy).sqrt().min(1.0);
-            raw.push(elevation_noise.fractal(fx, fy, 5) - edge.powi(3) * 0.35);
-        }
+/// Qué tan buen lugar es una casilla para asentarse: tierra fértil, agua dulce
+/// y acceso al mar, como en la historia real.
+fn site_score(map: &WorldMap, pos: Pos) -> f32 {
+    let tile = map.tile(pos).unwrap();
+    let mut score = match tile.biome {
+        Biome::Grassland => 1.0,
+        Biome::Forest | Biome::Savanna => 0.8,
+        Biome::Shrubland | Biome::Hills | Biome::Jungle => 0.5,
+        Biome::Taiga => 0.4,
+        Biome::Swamp => 0.3,
+        Biome::Desert | Biome::Tundra => 0.2,
+        _ => 0.0,
+    };
+    let near =
+        |f: &dyn Fn(&Tile) -> bool| f(tile) || map.neighbors8(pos).any(|n| f(map.tile(n).unwrap()));
+    if near(&|t| t.river.is_some()) {
+        score += 1.0;
     }
+    if near(&|t| t.biome.is_sea()) {
+        score += 0.6;
+    }
+    if near(&|t| t.biome == Biome::Lake) {
+        score += 0.5;
+    }
+    score
+}
 
-    // El nivel del mar es el cuantil pedido, así la proporción de agua es estable.
-    let mut sorted = raw.clone();
-    sorted.sort_by(f32::total_cmp);
-    let sea = sorted[((sorted.len() - 1) as f32 * config.sea_level.clamp(0.0, 1.0)) as usize];
-    let (min, max) = (sorted[0], sorted[sorted.len() - 1]);
-
-    let tiles = raw
-        .iter()
-        .enumerate()
-        .map(|(i, &e)| {
-            let elevation = if e < sea {
-                (e - min) / (sea - min).max(f32::EPSILON) * SEA_LEVEL
-            } else {
-                SEA_LEVEL + (e - sea) / (max - sea).max(f32::EPSILON) * (1.0 - SEA_LEVEL)
-            };
-            let (x, y) = ((i as u32 % w) as f32, (i as u32 / w) as f32);
-            let latitude = 1.0 - ((y / h as f32) - 0.5).abs() * 2.0;
-            let altitude_cooling = (elevation - SEA_LEVEL).max(0.0) * 0.6;
-            let temperature = (latitude * 0.85 + temp_noise.fractal(x * scale, y * scale, 3) * 0.3
-                - 0.1
-                - altitude_cooling)
-                .clamp(0.0, 1.0);
-            let rainfall = rain_noise.fractal(x * scale * 1.5, y * scale * 1.5, 4);
-            Tile {
-                elevation,
-                temperature,
-                rainfall,
-                biome: Biome::Ocean,
-                region: None,
-                owner: None,
-            }
+/// Casillas habitables que cumplen `filter`, de mejor a peor sitio, con algo
+/// de azar para que no siempre gane la misma.
+fn best_sites(world: &World, rng: &mut Rng, filter: impl Fn(&Tile) -> bool) -> Vec<Pos> {
+    let map = &world.map;
+    let mut sites: Vec<(f32, Pos)> = (0..map.tiles.len())
+        .filter(|&i| habitable(map.tiles[i].biome) && filter(&map.tiles[i]))
+        .map(|i| {
+            let pos = map.pos(i);
+            (site_score(map, pos) + rng.gen::<f32>() * 0.8, pos)
         })
         .collect();
-
-    WorldMap {
-        width: w,
-        height: h,
-        tiles,
-    }
-}
-
-fn assign_biomes(map: &mut WorldMap) {
-    for tile in &mut map.tiles {
-        let (e, t, r) = (tile.elevation, tile.temperature, tile.rainfall);
-        tile.biome = if e < SEA_LEVEL {
-            if e > SEA_LEVEL * 0.85 {
-                Biome::Coast
-            } else {
-                Biome::Ocean
-            }
-        } else if t < 0.12 {
-            Biome::Glacier
-        } else if e > 0.82 {
-            Biome::Mountain
-        } else if t < 0.28 {
-            Biome::Tundra
-        } else if r < 0.35 && t > 0.45 {
-            Biome::Desert
-        } else if r > 0.6 && t > 0.65 {
-            Biome::Jungle
-        } else if r > 0.5 {
-            Biome::Forest
-        } else {
-            Biome::Grassland
-        };
-    }
-}
-
-/// Agrupa casillas contiguas del mismo bioma en regiones con nombre.
-fn build_regions(map: &mut WorldMap, rng: &mut Rng) -> Vec<Region> {
-    let n = map.tiles.len();
-    let mut component = vec![u32::MAX; n];
-    let mut areas: Vec<u32> = Vec::new();
-    for start in 0..n {
-        if component[start] != u32::MAX {
-            continue;
-        }
-        let id = areas.len() as u32;
-        let biome = map.tiles[start].biome;
-        let mut area = 0;
-        let mut queue = VecDeque::from([start]);
-        component[start] = id;
-        while let Some(i) = queue.pop_front() {
-            area += 1;
-            for nb in map.neighbors(map.pos(i)) {
-                let j = map.index(nb);
-                if component[j] == u32::MAX && map.tiles[j].biome == biome {
-                    component[j] = id;
-                    queue.push_back(j);
-                }
-            }
-        }
-        areas.push(area);
-    }
-
-    // Fundir regiones diminutas con la vecina más grande, repitiendo hasta que
-    // no quede ninguna (una diminuta puede rodear a otra diminuta).
-    let mut parent: Vec<u32> = (0..areas.len() as u32).collect();
-    loop {
-        let mut changed = false;
-        for i in 0..n {
-            let c = find(&mut parent, component[i]);
-            if areas[c as usize] >= MIN_REGION_AREA {
-                continue;
-            }
-            let best = map
-                .neighbors(map.pos(i))
-                .map(|nb| find(&mut parent, component[map.index(nb)]))
-                .filter(|&o| o != c)
-                .max_by_key(|&o| areas[o as usize]);
-            if let Some(o) = best {
-                parent[c as usize] = o;
-                areas[o as usize] += areas[c as usize];
-                areas[c as usize] = 0;
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-
-    // Asignar ids compactos y tomar el bioma más común como bioma de la región.
-    let mut compact = vec![u32::MAX; areas.len()];
-    let mut regions: Vec<Region> = Vec::new();
-    let mut biome_counts: Vec<Vec<(Biome, u32)>> = Vec::new();
-    let mut sums: Vec<(u64, u64)> = Vec::new();
-    for (i, &comp) in component.iter().enumerate() {
-        let root = find(&mut parent, comp) as usize;
-        if compact[root] == u32::MAX {
-            compact[root] = regions.len() as u32;
-            regions.push(Region {
-                id: RegionId(compact[root]),
-                name: String::new(),
-                biome: map.tiles[i].biome,
-                area: 0,
-                center: map.pos(i),
-            });
-            biome_counts.push(Vec::new());
-            sums.push((0, 0));
-        }
-        let r = compact[root] as usize;
-        let pos = map.pos(i);
-        regions[r].area += 1;
-        sums[r].0 += u64::from(pos.x);
-        sums[r].1 += u64::from(pos.y);
-        let biome = map.tiles[i].biome;
-        match biome_counts[r].iter_mut().find(|(b, _)| *b == biome) {
-            Some((_, c)) => *c += 1,
-            None => biome_counts[r].push((biome, 1)),
-        }
-        map.tiles[i].region = Some(RegionId(r as u32));
-    }
-
-    for (r, region) in regions.iter_mut().enumerate() {
-        region.biome = biome_counts[r].iter().max_by_key(|(_, c)| *c).unwrap().0;
-        region.name = region_name(region.biome, &names::word(rng, 2, 3));
-        // La casilla de la región más cercana a su centroide.
-        let (cx, cy) = (
-            sums[r].0 / u64::from(region.area),
-            sums[r].1 / u64::from(region.area),
-        );
-        region.center = map
-            .tiles
-            .iter()
-            .enumerate()
-            .filter(|(_, t)| t.region == Some(region.id))
-            .map(|(i, _)| map.pos(i))
-            .min_by_key(|p| p.x.abs_diff(cx as u32).pow(2) + p.y.abs_diff(cy as u32).pow(2))
-            .unwrap();
-    }
-    regions
-}
-
-fn find(parent: &mut [u32], mut x: u32) -> u32 {
-    while parent[x as usize] != x {
-        parent[x as usize] = parent[parent[x as usize] as usize];
-        x = parent[x as usize];
-    }
-    x
-}
-
-fn region_name(biome: Biome, word: &str) -> String {
-    let prefix = match biome {
-        Biome::Ocean => "Mar de",
-        Biome::Coast => "Bahía de",
-        Biome::Desert => "Desierto de",
-        Biome::Grassland => "Llanuras de",
-        Biome::Forest => "Bosque de",
-        Biome::Jungle => "Selva de",
-        Biome::Tundra => "Tundra de",
-        Biome::Mountain => "Montes de",
-        Biome::Glacier => "Hielos de",
-    };
-    format!("{prefix} {word}")
-}
-
-fn habitable(biome: Biome) -> bool {
-    matches!(
-        biome,
-        Biome::Grassland | Biome::Forest | Biome::Jungle | Biome::Desert | Biome::Tundra
-    )
-}
-
-fn fertile(biome: Biome) -> bool {
-    matches!(biome, Biome::Grassland | Biome::Forest)
+    sites.sort_by(|a, b| b.0.total_cmp(&a.0));
+    sites.into_iter().map(|(_, p)| p).collect()
 }
 
 fn distance2(a: Pos, b: Pos) -> u32 {
@@ -320,12 +134,8 @@ fn add_locality(
 }
 
 fn found_countries(world: &mut World, rng: &mut Rng) {
+    let candidates = best_sites(world, rng, |_| true);
     let map = &world.map;
-    let mut candidates: Vec<Pos> = (0..map.tiles.len())
-        .filter(|&i| fertile(map.tiles[i].biome))
-        .map(|i| map.pos(i))
-        .collect();
-    candidates.shuffle(rng);
 
     // Capitales separadas entre sí para que cada país tenga espacio.
     let spacing = (map.width.min(map.height) / 5).max(4).pow(2);
@@ -378,13 +188,7 @@ fn found_countries(world: &mut World, rng: &mut Rng) {
     // Pueblos y aldeas dentro de cada país.
     for c in 0..world.countries.len() {
         let country = CountryId(c as u32);
-        let mut owned: Vec<Pos> = (0..world.map.tiles.len())
-            .filter(|&i| {
-                world.map.tiles[i].owner == Some(country) && habitable(world.map.tiles[i].biome)
-            })
-            .map(|i| world.map.pos(i))
-            .collect();
-        owned.shuffle(rng);
+        let owned = best_sites(world, rng, |t| t.owner == Some(country));
         let wanted = rng.gen_range(2..=5);
         let mut placed = 0;
         for pos in owned {
@@ -406,31 +210,57 @@ fn found_countries(world: &mut World, rng: &mut Rng) {
     }
 }
 
-/// Expansión simultánea desde las capitales por tierra firme, con un radio
-/// máximo distinto para cada país. Las casillas sin reclamar quedan libres.
+/// Coste de extender el dominio a una casilla: las montañas, pantanos y
+/// desiertos frenan la expansión, así que las fronteras siguen el relieve.
+fn travel_cost(tile: &Tile) -> u32 {
+    let base = match tile.biome {
+        Biome::Grassland | Biome::Savanna => 10,
+        Biome::Forest | Biome::Shrubland => 14,
+        Biome::Hills | Biome::Taiga | Biome::Jungle => 20,
+        Biome::Desert | Biome::Tundra | Biome::Swamp => 25,
+        Biome::Mountain => 45,
+        Biome::Glacier => 60,
+        _ => 10,
+    };
+    // Cruzar un río grande cuesta un poco más: los ríos suelen ser fronteras.
+    base + if tile.river.is_some() { 6 } else { 0 }
+}
+
+/// Expansión simultánea desde las capitales por tierra firme (Dijkstra), con un
+/// alcance distinto para cada país. Las casillas sin reclamar quedan libres.
 fn claim_territory(world: &mut World, capitals: &[Pos], rng: &mut Rng) {
     let map = &mut world.map;
-    let reach: Vec<u32> = capitals.iter().map(|_| rng.gen_range(8..18)).collect();
-    let mut dist = vec![u32::MAX; map.tiles.len()];
-    let mut queue = VecDeque::new();
+    let size = map.width.max(map.height);
+    let reach: Vec<u32> = capitals
+        .iter()
+        .map(|_| rng.gen_range(size..size * 2))
+        .collect();
+    let mut cost = vec![u32::MAX; map.tiles.len()];
+    let mut open = BinaryHeap::new();
     for (c, &pos) in capitals.iter().enumerate() {
         let i = map.index(pos);
-        dist[i] = 0;
-        map.tiles[i].owner = Some(CountryId(c as u32));
-        queue.push_back(i);
+        cost[i] = 0;
+        open.push(Reverse((0, i, c)));
     }
-    while let Some(i) = queue.pop_front() {
-        let owner = map.tiles[i].owner.unwrap();
-        if dist[i] >= reach[owner.index()] {
+    while let Some(Reverse((spent, i, c))) = open.pop() {
+        if spent > cost[i] || map.tiles[i].owner.is_some() {
             continue;
         }
-        let neighbors: Vec<Pos> = map.neighbors(map.pos(i)).collect();
+        map.tiles[i].owner = Some(CountryId(c as u32));
+        let here = map.pos(i);
+        let neighbors: Vec<Pos> = map.neighbors8(here).collect();
         for nb in neighbors {
             let j = map.index(nb);
-            if dist[j] == u32::MAX && !map.tiles[j].biome.is_water() {
-                dist[j] = dist[i] + 1;
-                map.tiles[j].owner = Some(owner);
-                queue.push_back(j);
+            let tile = &map.tiles[j];
+            if tile.biome.is_water() || tile.owner.is_some() {
+                continue;
+            }
+            let diagonal = nb.x != here.x && nb.y != here.y;
+            let step = travel_cost(tile);
+            let next = spent + if diagonal { step * 14 / 10 } else { step };
+            if next <= reach[c] && next < cost[j] {
+                cost[j] = next;
+                open.push(Reverse((next, j, c)));
             }
         }
     }
@@ -438,11 +268,7 @@ fn claim_territory(world: &mut World, capitals: &[Pos], rng: &mut Rng) {
 
 /// Algunas aldeas independientes en tierras sin dueño.
 fn found_villages(world: &mut World, rng: &mut Rng) {
-    let mut free: Vec<Pos> = (0..world.map.tiles.len())
-        .filter(|&i| world.map.tiles[i].owner.is_none() && habitable(world.map.tiles[i].biome))
-        .map(|i| world.map.pos(i))
-        .collect();
-    free.shuffle(rng);
+    let free = best_sites(world, rng, |t| t.owner.is_none());
     let wanted = (world.config.countries as usize).max(2);
     let mut placed = 0;
     for pos in free {
