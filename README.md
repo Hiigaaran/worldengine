@@ -7,7 +7,17 @@ Dwarf Fortress.
 
 ![Viaje en el tiempo: el mundo en el año 76](docs/img/viaje-en-el-tiempo.png)
 
-## Cómo ejecutarlo
+## Descargar
+
+Cada versión publica binarios para Linux, Windows y macOS (Apple Silicon) en
+[Releases](https://github.com/Hiigaaran/worldengine/releases). Basta con
+descomprimir y ejecutar `worldengine`. Los cambios de cada versión están en
+[CHANGELOG.md](CHANGELOG.md).
+
+En macOS, la primera vez hay que abrirlo con clic derecho → Abrir, porque el
+binario no está firmado.
+
+## Cómo ejecutarlo (desde el código)
 
 ```sh
 cargo run --release -p worldengine-app      # app visual
