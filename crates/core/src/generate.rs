@@ -19,7 +19,15 @@ use crate::names;
 use crate::rng::{Rng, WorldRng};
 use crate::simulate;
 
+/// Genera un mundo completo: geografía, fundación y `history_years` años de historia.
 pub fn generate(config: &WorldConfig) -> World {
+    let mut world = found(config);
+    simulate::run(&mut world, config.history_years);
+    world
+}
+
+/// Genera el mundo tal como era en el año de inicio, antes de simular la historia.
+pub fn found(config: &WorldConfig) -> World {
     let rng = WorldRng::new(config.seed);
     let geography = geography::build(config, &rng);
 
@@ -42,7 +50,6 @@ pub fn generate(config: &WorldConfig) -> World {
     create_people(&mut world, &mut rng.stream("people"));
     init_relations(&mut world, &mut rng.stream("relations"));
     sort_events(&mut world);
-    simulate::run(&mut world, config.history_years);
     world
 }
 

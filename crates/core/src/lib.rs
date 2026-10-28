@@ -1,5 +1,6 @@
-//! Motor de WorldEngine: genera mundos ficticios a partir de una semilla y
-//! (en próximos pasos) simula su historia año a año.
+//! Motor de WorldEngine: genera mundos ficticios a partir de una semilla,
+//! simula su historia año a año y permite consultarla como en el modo Leyendas
+//! de Dwarf Fortress.
 //!
 //! ```
 //! use worldengine_core::{generate, WorldConfig};
@@ -11,6 +12,7 @@
 pub mod generate;
 pub mod geography;
 pub mod ids;
+pub mod legends;
 pub mod model;
 mod names;
 mod noise;
@@ -18,7 +20,8 @@ pub mod query;
 pub mod rng;
 pub mod simulate;
 
-pub use generate::generate;
+pub use generate::{found, generate};
 pub use ids::*;
+pub use legends::Chronicle;
 pub use model::*;
 pub use query::Subject;

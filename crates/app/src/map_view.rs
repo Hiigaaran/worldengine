@@ -47,6 +47,8 @@ pub struct MapView {
     /// Coordenada (en casillas) que queda en el centro de la vista.
     center: Option<Vec2>,
     texture: Option<TextureHandle>,
+    /// Qué mundo y año está pintado en la textura; si cambia, se repinta.
+    texture_key: Option<(u64, i32, usize)>,
 }
 
 impl Default for MapView {
@@ -56,6 +58,7 @@ impl Default for MapView {
             zoom: 1.0,
             center: None,
             texture: None,
+            texture_key: None,
         }
     }
 }
@@ -65,11 +68,6 @@ impl MapView {
         self.texture = None;
         self.center = None;
         self.zoom = 1.0;
-    }
-
-    /// Vuelve a pintar el mapa (tras simular) sin mover la vista.
-    pub fn refresh(&mut self) {
-        self.texture = None;
     }
 
     pub fn set_mode(&mut self, mode: MapMode) {
@@ -84,8 +82,15 @@ impl MapView {
         self.zoom = self.zoom.max(4.0);
     }
 
-    /// Dibuja el mapa y devuelve la casilla clicada, si la hay.
-    pub fn show(&mut self, ui: &mut egui::Ui, world: &World, selected: Option<Pos>) -> Option<Pos> {
+    /// Dibuja el mapa y devuelve la casilla clicada, si la hay. `markers` son
+    /// lugares a destacar, como los hechos del año que se está viendo.
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        world: &World,
+        selected: Option<Pos>,
+        markers: &[Pos],
+    ) -> Option<Pos> {
         let (w, h) = (world.map.width as f32, world.map.height as f32);
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
         let rect = response.rect;
@@ -120,6 +125,15 @@ impl MapView {
 
         let painter = painter.with_clip_rect(rect);
         painter.rect_filled(rect, 0.0, Color32::from_rgb(10, 20, 40));
+        // Solo el mapa político cambia con los años.
+        let key = match self.mode {
+            MapMode::Political => (world.config.seed, world.year, world.events.len()),
+            _ => (world.config.seed, 0, 0),
+        };
+        if self.texture_key != Some(key) {
+            self.texture = None;
+            self.texture_key = Some(key);
+        }
         let texture = self.texture.get_or_insert_with(|| {
             ui.ctx().load_texture(
                 "world-map",
@@ -252,6 +266,12 @@ impl MapView {
                 let p = to_screen(capital.x as f32 + 0.5, capital.y as f32 + 0.5);
                 label(p + Vec2::new(0.0, 22.0), &country.name.to_uppercase(), 15.0);
             }
+        }
+
+        let pulse = Color32::from_rgb(235, 70, 60);
+        for &m in markers {
+            let p = to_screen(m.x as f32 + 0.5, m.y as f32 + 0.5);
+            painter.circle_stroke(p, (px * 1.2).max(9.0), Stroke::new(2.5_f32, pulse));
         }
 
         if let Some(sel) = selected {

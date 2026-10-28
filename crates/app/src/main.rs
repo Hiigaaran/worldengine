@@ -2,7 +2,9 @@
 
 mod app;
 mod details;
+mod legends;
 mod map_view;
+mod nav;
 mod render;
 mod timeline;
 

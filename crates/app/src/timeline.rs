@@ -1,13 +1,18 @@
-//! Línea de tiempo: los eventos del mundo en orden cronológico, con filtros. En
-//! el paso 4 será un control deslizable que cambia el mapa por año.
+//! Línea de tiempo: un control para viajar a cualquier año (el mapa y los
+//! detalles muestran el mundo de ese momento) y la lista de eventos hasta ese
+//! año, con filtros.
 
 use eframe::egui::{self, RichText};
-use worldengine_core::{Pos, World};
+use worldengine_core::{Pos, World, Year};
+
+use crate::nav::Nav;
 
 pub struct Timeline {
     /// Oculta nacimientos, fundaciones de aldeas y muertes de personajes menores.
     pub major_only: bool,
     pub query: String,
+    /// Avanza un año cada pocos instantes, como una película de la historia.
+    pub playing: bool,
 }
 
 impl Default for Timeline {
@@ -15,21 +20,57 @@ impl Default for Timeline {
         Self {
             major_only: true,
             query: String::new(),
+            playing: false,
         }
     }
 }
 
 impl Timeline {
-    /// Muestra la línea de tiempo y devuelve la ubicación del evento clicado.
-    pub fn show(&mut self, ui: &mut egui::Ui, world: &World, selected: Option<Pos>) -> Option<Pos> {
-        let mut go_to = None;
-        let first = world.events.first().map_or(world.year, |e| e.year);
+    /// `world` es el mundo en el presente; `shown` es el año que se está viendo.
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        world: &World,
+        shown: Year,
+        selected: Option<Pos>,
+    ) -> Option<Nav> {
+        let mut nav = None;
+        let first = world.config.start_year;
+        let present = world.year;
+
+        ui.horizontal(|ui| {
+            ui.strong("Año mostrado");
+            let mut year = shown;
+            ui.spacing_mut().slider_width = (ui.available_width() - 420.0).clamp(150.0, 700.0);
+            let slider = ui.add(egui::Slider::new(&mut year, first..=present));
+            if slider.changed() && year != shown {
+                nav = Some(Nav::Travel(year, None));
+            }
+            for (label, delta) in [("-10", -10), ("-1", -1), ("+1", 1), ("+10", 10)] {
+                if ui.button(label).clicked() {
+                    nav = Some(Nav::Travel((shown + delta).clamp(first, present), None));
+                }
+            }
+            let play = if self.playing { "Pausa" } else { "Reproducir" };
+            if ui.button(play).clicked() {
+                self.playing = !self.playing;
+                if self.playing && shown >= present {
+                    nav = Some(Nav::Travel(first, None));
+                }
+            }
+            if shown != present && ui.button("Volver al presente").clicked() {
+                self.playing = false;
+                nav = Some(Nav::Present);
+            }
+        });
+
         let query = self.query.trim().to_lowercase();
         // Las descripciones se calculan una vez por cuadro para poder filtrar por texto.
         let rows: Vec<(usize, String)> = world
             .events
             .iter()
             .enumerate()
+            .take_while(|(_, e)| e.year <= shown)
             .filter(|(_, e)| !self.major_only || world.is_major(e))
             .map(|(i, e)| (i, world.describe(e)))
             .filter(|(_, text)| query.is_empty() || text.to_lowercase().contains(&query))
@@ -39,10 +80,9 @@ impl Timeline {
             ui.strong("Línea de tiempo");
             ui.label(
                 RichText::new(format!(
-                    "del año {first} al {} · {} de {} eventos",
-                    world.year,
+                    "del año {} al {shown} · {} eventos",
+                    world.events.first().map_or(first, |e| e.year),
                     rows.len(),
-                    world.events.len()
                 ))
                 .weak(),
             );
@@ -64,14 +104,19 @@ impl Timeline {
             .show_rows(ui, row_height, rows.len(), |ui, range| {
                 for (i, text) in &rows[range] {
                     let event = &world.events[*i];
+                    let this_year = event.year == shown && shown != present;
                     let here = event.location.is_some() && event.location == selected;
                     let text = RichText::new(format!("Año {:>5}  {text}", event.year)).monospace();
-                    let text = if here { text.strong() } else { text };
+                    let text = if this_year || here {
+                        text.strong()
+                    } else {
+                        text
+                    };
                     if ui.selectable_label(here, text).clicked() {
-                        go_to = event.location;
+                        nav = Some(Nav::Travel(event.year, event.location));
                     }
                 }
             });
-        go_to
+        nav
     }
 }

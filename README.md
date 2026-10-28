@@ -5,13 +5,14 @@ para escribir un libro, preparar una campaña de Dungeons & Dragons o simplement
 explorar. La inspiración es la generación de mundos y el modo Leyendas de
 Dwarf Fortress.
 
-![Mapa físico](docs/img/mapa-fisico.png)
+![Viaje en el tiempo: el mundo en el año 76](docs/img/viaje-en-el-tiempo.png)
 
 ## Cómo ejecutarlo
 
 ```sh
 cargo run --release -p worldengine-app      # app visual
 cargo run -p worldengine-core --example summary -- Arda   # resumen en terminal
+cargo run -p worldengine-core --example chronicle -- Arda > cronica.md   # crónica
 cargo test --workspace
 ```
 
@@ -24,6 +25,20 @@ Al acercarse aparecen afluentes, regiones pequeñas y nombres de ríos y aldeas.
 El mapa tiene cinco capas: física, política, elevación, temperatura y lluvia. La
 semilla acepta números o texto: la misma semilla produce siempre el mismo mundo.
 **Exportar JSON** guarda el mundo completo en el directorio actual.
+
+### Modo Leyendas
+
+- **Año mostrado**: el control deslizable de la línea de tiempo (y los botones
+  -10, -1, +1, +10) muestran el mundo tal como era en cualquier año: fronteras,
+  ciudades, gobernantes y personajes vivos. **Reproducir** avanza la historia
+  año a año como una película, y los grandes hechos de cada año se marcan en
+  rojo en el mapa. Un clic en un evento viaja a ese año y lugar.
+- **Leyendas** (panel izquierdo): enciclopedia de países, localidades,
+  personajes y guerras de toda la historia, con buscador. Cada ficha enlaza a
+  las demás (gobernantes, progenitores, descendencia, batallas, conquistas) y
+  cada hecho tiene un enlace a su año.
+- **Exportar crónica** guarda la historia completa en Markdown: geografía,
+  países con sus gobernantes, guerras y anales año por año.
 
 ## Estructura
 
@@ -41,7 +56,7 @@ Mundo → Mapa (casillas: elevación, temperatura, lluvia, bioma, región, dueñ
 
 Todas las entidades se referencian por ids tipados (`RegionId`, `CountryId`, ...)
 que son índices en las colecciones del `World`. Los eventos son la columna
-vertebral de la historia: la línea de tiempo y el futuro modo Leyendas se
+vertebral de la historia: la línea de tiempo y el modo Leyendas se
 construyen a partir de ellos.
 
 La generación corre por etapas, y cada una usa su propio flujo aleatorio
@@ -85,7 +100,9 @@ fronteras siguen el relieve.
   y sus provincias lejanas se rebelan y fundan nuevos países.
 
 Cada año usa su propio flujo aleatorio: simular 100 años y luego 50 más da
-exactamente el mismo mundo que simular 150 de una vez. En la app, **Simular +10
+exactamente el mismo mundo que simular 150 de una vez. Por eso el modo Leyendas
+(`crates/core/src/legends.rs`) no guarda cada año: guarda una instantánea cada
+10 años y reconstruye los intermedios simulando desde la anterior. En la app, **Simular +10
 / +50 años** continúa la historia, y la línea de tiempo se puede filtrar (solo
 grandes hechos) y buscar por nombre.
 
@@ -101,3 +118,4 @@ grandes hechos) y buscar por nombre.
    cambian. *(hecho)*
 4. **Modo Leyendas.** Línea de tiempo deslizable que muestra el mapa en cada año,
    búsqueda de personajes, sitios y eventos, y exportación a crónica en texto.
+   *(hecho)*

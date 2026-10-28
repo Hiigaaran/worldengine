@@ -212,3 +212,36 @@ fn history_is_eventful() {
         }
     }
 }
+
+#[test]
+fn chronicle_rebuilds_any_year() {
+    let config = WorldConfig {
+        seed: 9,
+        history_years: 60,
+        ..Default::default()
+    };
+    let mut chronicle = Chronicle::new(&config);
+    assert_eq!(chronicle.at(60), generate(&config));
+    for year in [0, 7, 23, 41] {
+        let expected = generate(&WorldConfig {
+            history_years: year as u32,
+            ..config.clone()
+        });
+        let mut past = chronicle.at(year);
+        past.config.history_years = year as u32;
+        assert_eq!(past, expected, "año {year}");
+    }
+}
+
+#[test]
+fn chronicle_text_covers_history() {
+    let w = world(4);
+    let text = w.chronicle_markdown();
+    assert!(text.starts_with(&format!("# Crónica de {}", w.name)));
+    for c in &w.countries {
+        assert!(text.contains(&c.name), "falta {}", c.name);
+    }
+    for war in &w.wars {
+        assert!(text.contains(&war.name));
+    }
+}

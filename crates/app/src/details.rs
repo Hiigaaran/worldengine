@@ -4,11 +4,7 @@
 use eframe::egui::{self, RichText};
 use worldengine_core::{Biome, Country, Person, Pos, Subject, Tile, World};
 
-/// Navegación pedida desde el panel.
-pub enum Nav {
-    GoTo(Pos),
-    Overview,
-}
+use crate::nav::{Nav, Page};
 
 /// Muestra el panel y devuelve la navegación que pidió el usuario, si alguna.
 pub fn show(ui: &mut egui::Ui, world: &World, selected: Option<Pos>) -> Option<Nav> {
@@ -24,6 +20,16 @@ pub fn show(ui: &mut egui::Ui, world: &World, selected: Option<Pos>) -> Option<N
 fn link_to(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, pos: Pos, nav: &mut Option<Nav>) {
     if ui.link(text).clicked() {
         *nav = Some(Nav::GoTo(pos));
+    }
+}
+
+fn open(ui: &mut egui::Ui, page: Page, nav: &mut Option<Nav>) {
+    if ui
+        .small_button("Leyendas")
+        .on_hover_text("Abrir su ficha en Leyendas")
+        .clicked()
+    {
+        *nav = Some(Nav::Open(page));
     }
 }
 
@@ -62,7 +68,10 @@ fn overview(ui: &mut egui::Ui, world: &World, nav: &mut Option<Nav>) {
     let fallen: Vec<&Country> = world.countries.iter().filter(|c| !c.exists()).collect();
     ui.collapsing(format!("Países desaparecidos ({})", fallen.len()), |ui| {
         for c in fallen {
-            ui.label(format!("{} ({} – {})", c.name, c.founded, c.fell.unwrap()));
+            ui.horizontal(|ui| {
+                ui.label(format!("{} ({} – {})", c.name, c.founded, c.fell.unwrap()));
+                open(ui, Page::Country(c.id), nav);
+            });
         }
     });
     ui.collapsing(format!("Guerras ({})", world.wars.len()), |ui| {
@@ -78,7 +87,9 @@ fn overview(ui: &mut egui::Ui, world: &World, nav: &mut Option<Nav>) {
             if let Some(winner) = war.winner {
                 text += &format!(", vence {}", world.country(winner).name);
             }
-            ui.label(text);
+            if ui.link(text).clicked() {
+                *nav = Some(Nav::Open(Page::War(war.id)));
+            }
         }
     });
 }
@@ -145,7 +156,10 @@ fn tile_details(ui: &mut egui::Ui, world: &World, pos: Pos, tile: &Tile, nav: &m
 
     if let Some(locality) = world.locality_at(pos) {
         ui.separator();
-        ui.strong(format!("{}: {}", locality.kind.name(), locality.name));
+        ui.horizontal(|ui| {
+            ui.strong(format!("{}: {}", locality.kind.name(), locality.name));
+            open(ui, Page::Locality(locality.id), nav);
+        });
         match locality.ruined {
             Some(year) => ui.label(format!(
                 "En ruinas desde el año {year} · fundada en el año {}",
@@ -160,12 +174,12 @@ fn tile_details(ui: &mut egui::Ui, world: &World, pos: Pos, tile: &Tile, nav: &m
             world.residents(locality.id).partition(|p| p.died.is_none());
         ui.label(RichText::new("Personajes de interés").underline());
         for person in living {
-            person_details(ui, world, person);
+            person_details(ui, world, person, nav);
         }
         if !dead.is_empty() {
             ui.collapsing(format!("Personajes del pasado ({})", dead.len()), |ui| {
                 for person in dead {
-                    person_details(ui, world, person);
+                    person_details(ui, world, person, nav);
                 }
             });
         }
@@ -179,7 +193,10 @@ fn tile_details(ui: &mut egui::Ui, world: &World, pos: Pos, tile: &Tile, nav: &m
 
 fn country_details(ui: &mut egui::Ui, world: &World, country: &Country, nav: &mut Option<Nav>) {
     ui.separator();
-    ui.strong(format!("País: {}", country.name));
+    ui.horizontal(|ui| {
+        ui.strong(format!("País: {}", country.name));
+        open(ui, Page::Country(country.id), nav);
+    });
     ui.label(format!(
         "{} · fundado en el año {}",
         country.government.name(),
@@ -254,7 +271,7 @@ fn country_details(ui: &mut egui::Ui, world: &World, country: &Country, nav: &mu
     });
 }
 
-fn person_details(ui: &mut egui::Ui, world: &World, person: &Person) {
+fn person_details(ui: &mut egui::Ui, world: &World, person: &Person, nav: &mut Option<Nav>) {
     let title = match person.died {
         Some(died) => format!(
             "{} ({}, {} – {died})",
@@ -270,6 +287,7 @@ fn person_details(ui: &mut egui::Ui, world: &World, person: &Person) {
         ),
     };
     ui.collapsing(title, |ui| {
+        open(ui, Page::Person(person.id), nav);
         if let Some(parent) = person.parent.map(|p| world.person(p)) {
             ui.label(format!("Hijo de {}", parent.name));
         }
