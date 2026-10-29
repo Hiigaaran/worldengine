@@ -12,6 +12,7 @@ use std::collections::BinaryHeap;
 use rand::seq::SliceRandom;
 use rand::Rng as _;
 
+use crate::age::Age;
 use crate::geography;
 use crate::ids::*;
 use crate::model::*;
@@ -33,7 +34,7 @@ pub fn found(config: &WorldConfig) -> World {
 
     let mut world = World {
         config: config.clone(),
-        name: names::word(&mut rng.stream("world-name"), 2, 3),
+        name: names::world(&mut rng.stream("world-name"), config.age),
         year: config.start_year,
         map: geography.map,
         regions: geography.regions,
@@ -150,7 +151,7 @@ pub(crate) fn add_locality(
     };
     world.localities.push(Locality {
         id,
-        name: names::word(rng, 2, 3),
+        name: names::place(rng, world.config.age),
         kind,
         pos,
         country,
@@ -189,9 +190,10 @@ fn found_countries(world: &mut World, rng: &mut Rng) {
         let founded = start - rng.gen_range(50..400);
         let capital = add_locality(world, rng, pos, LocalityKind::City, Some(country), founded);
         let government = random_government(rng);
+        let age = world.config.age;
         world
             .countries
-            .push(new_country(rng, country, capital, founded, government));
+            .push(new_country(rng, age, country, capital, founded, government));
         push_event(
             world,
             founded,
@@ -240,23 +242,32 @@ pub(crate) fn random_government(rng: &mut Rng) -> Government {
 
 pub(crate) fn new_country(
     rng: &mut Rng,
+    age: Age,
     id: CountryId,
     capital: LocalityId,
     founded: Year,
     government: Government,
 ) -> Country {
+    let mut color = [
+        rng.gen_range(60..230),
+        rng.gen_range(60..230),
+        rng.gen_range(60..230),
+    ];
+    if age == Age::Cyberpunk {
+        // Colores de neón: un canal encendido y otro apagado.
+        let bright = rng.gen_range(0..3);
+        let dark = (bright + rng.gen_range(1..3)) % 3;
+        color[bright] = rng.gen_range(225..=255);
+        color[dark] = rng.gen_range(20..70);
+    }
     Country {
         id,
-        name: names::word(rng, 2, 3),
+        name: names::country(rng, age, government),
         government,
         capital,
         founded,
         ruler: None,
-        color: [
-            rng.gen_range(60..230),
-            rng.gen_range(60..230),
-            rng.gen_range(60..230),
-        ],
+        color,
         stability: 0.7,
         fell: None,
     }
@@ -413,9 +424,9 @@ pub(crate) fn add_person(
                 .next_back()
                 .unwrap_or("")
                 .to_string();
-            format!("{} {family}", names::word(rng, 1, 2))
+            format!("{} {family}", names::given(rng, world.config.age))
         }
-        None => names::person(rng),
+        None => names::person(rng, world.config.age),
     };
     world.people.push(Person {
         id,

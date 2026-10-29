@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::age::Age;
 use crate::ids::*;
 
 /// Año del calendario del mundo. Puede ser negativo (antes de la era).
@@ -28,6 +29,9 @@ pub struct WorldConfig {
     pub start_year: Year,
     /// Años de historia que se simulan tras la fundación del mundo.
     pub history_years: u32,
+    /// La edad del mundo: realista, fantasía o cyberpunk (ver [`crate::age`]).
+    #[serde(default)]
+    pub age: Age,
 }
 
 impl Default for WorldConfig {
@@ -40,6 +44,7 @@ impl Default for WorldConfig {
             countries: 6,
             start_year: 0,
             history_years: 250,
+            age: Age::Realistic,
         }
     }
 }
@@ -224,17 +229,6 @@ pub enum Government {
     TribalCouncil,
 }
 
-impl Government {
-    pub fn name(self) -> &'static str {
-        match self {
-            Government::Monarchy => "Monarquía",
-            Government::Republic => "República",
-            Government::Theocracy => "Teocracia",
-            Government::TribalCouncil => "Consejo tribal",
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Country {
     pub id: CountryId,
@@ -265,16 +259,6 @@ pub enum LocalityKind {
     City,
 }
 
-impl LocalityKind {
-    pub fn name(self) -> &'static str {
-        match self {
-            LocalityKind::Village => "Aldea",
-            LocalityKind::Town => "Pueblo",
-            LocalityKind::City => "Ciudad",
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Locality {
     pub id: LocalityId,
@@ -297,20 +281,6 @@ pub enum Role {
     Merchant,
     Scholar,
     Adventurer,
-}
-
-impl Role {
-    pub fn name(self) -> &'static str {
-        match self {
-            Role::Ruler => "Gobernante",
-            Role::Noble => "Noble",
-            Role::General => "General",
-            Role::Priest => "Sacerdote",
-            Role::Merchant => "Mercader",
-            Role::Scholar => "Erudito",
-            Role::Adventurer => "Aventurero",
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -372,19 +342,51 @@ pub enum DeathCause {
     Assassination,
     Plague,
     Execution,
+    /// Una calamidad: hambruna, dragón, fusión de un reactor...
+    Calamity,
 }
 
-impl DeathCause {
-    pub fn name(self) -> &'static str {
-        match self {
-            DeathCause::OldAge => "de vejez",
-            DeathCause::Illness => "por enfermedad",
-            DeathCause::Battle => "en batalla",
-            DeathCause::Assassination => "asesinado",
-            DeathCause::Plague => "por la peste",
-            DeathCause::Execution => "ejecutado",
-        }
-    }
+/// Desastres que golpean a un país. Cada edad tiene los suyos (ver
+/// [`Age::calamities`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Calamity {
+    // Realista
+    Famine,
+    Flood,
+    Earthquake,
+    Fire,
+    // Fantasía
+    Dragon,
+    Undead,
+    ArcaneStorm,
+    DemonGate,
+    // Cyberpunk
+    Blackout,
+    RogueAi,
+    AcidRain,
+    Meltdown,
+}
+
+/// Logros de un personaje que pasan a la historia. Cada edad tiene los suyos
+/// (ver [`Age::feats`]); el rescate es la respuesta a una calamidad.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Feat {
+    // Realista
+    Invention,
+    Expedition,
+    Treatise,
+    // Fantasía
+    Artifact,
+    /// Un grimorio prohibido: puede abrir un portal demoníaco años después.
+    Grimoire,
+    // Cyberpunk
+    /// Una IA que puede rebelarse años después.
+    ArtificialMind,
+    Implant,
+    /// Robo de datos a otro país: una ofensa que puede acabar en guerra.
+    Heist,
+    /// Quien vence a una calamidad (el evento que la causa).
+    Rescue,
 }
 
 /// Relación entre dos países. Se guarda una por par, con `a < b`.
@@ -519,6 +521,19 @@ pub enum EventKind {
         target: PersonId,
         plotter: PersonId,
         motive: Motive,
+    },
+    /// Una calamidad propia de la edad del mundo azota un país.
+    Calamity {
+        country: CountryId,
+        calamity: Calamity,
+        deaths: u32,
+    },
+    /// Un personaje logra una hazaña.
+    Feat {
+        person: PersonId,
+        feat: Feat,
+        /// El país que sufre la hazaña, si es un golpe contra otro.
+        target: Option<CountryId>,
     },
 }
 

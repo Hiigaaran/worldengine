@@ -22,7 +22,8 @@ binario no está firmado.
 ```sh
 cargo run --release -p worldengine-app      # app visual
 cargo run -p worldengine-core --example summary -- Arda   # resumen en terminal
-cargo run -p worldengine-core --example chronicle -- Arda > cronica.md   # crónica
+cargo run -p worldengine-core --example chronicle -- Arda fantasia > cronica.md   # crónica
+cargo run -p worldengine-core --example stories -- Arda cyberpunk   # historias
 cargo test --workspace
 ```
 
@@ -35,6 +36,25 @@ Al acercarse aparecen afluentes, regiones pequeñas y nombres de ríos y aldeas.
 El mapa tiene cinco capas: física, política, elevación, temperatura y lluvia. La
 semilla acepta números o texto: la misma semilla produce siempre el mismo mundo.
 **Exportar JSON** guarda el mundo completo en el directorio actual.
+
+### Edades
+
+El selector **Edad** genera el mundo en una de tres edades. La misma semilla
+conserva la geografía, pero todo lo demás cambia de tono:
+
+| | Realista | Fantasía | Cyberpunk |
+| --- | --- | --- | --- |
+| Gobiernos | Monarquía, república, teocracia, consejo tribal | Reino, concilio de magos, teocracia arcana, horda | Megacorporación, ciudad libre, culto tecnológico, sindicato de bandas |
+| Personajes | Nobles, generales, sacerdotes, eruditos… | Soberanos, paladines, clérigos, magos… | Directores, ejecutivos, tecnochamanes, hackers, mercenarios… |
+| Clima extraño | — | Tormentas arcanas (nubes violetas con chispas) | Lluvia ácida (nubes verdosas) |
+| Calamidades | Hambrunas, inundaciones, terremotos, incendios | Dragones, muertos que se alzan, tormentas arcanas, portales demoníacos | Apagones, IAs rebeldes, lluvia ácida, fusión de reactores |
+| Hazañas | Inventos, tratados, expediciones | Artefactos, grimorios prohibidos, ruinas olvidadas | IAs, implantes, robos de datos |
+
+Las calamidades nacen del clima del año y de la historia: un grimorio
+descifrado puede abrir un portal décadas después, una IA puede rebelarse
+contra quien la creó, los caídos de una guerra pueden alzarse, y un robo de
+datos puede acabar en guerra. A veces alguien vence a la calamidad (mata al
+dragón, desconecta a la IA) y queda en la historia.
 
 ### Modo Leyendas
 

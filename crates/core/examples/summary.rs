@@ -1,5 +1,5 @@
 //! Genera un mundo y muestra un resumen en la terminal.
-//! Uso: cargo run -p worldengine-core --example summary -- [semilla]
+//! Uso: cargo run -p worldengine-core --example summary -- [semilla] [realista|fantasia|cyberpunk]
 
 use worldengine_core::*;
 
@@ -8,8 +8,13 @@ fn main() {
         .nth(1)
         .map(|s| rng::seed_from_text(&s))
         .unwrap_or(1);
+    let age = std::env::args()
+        .nth(2)
+        .and_then(|a| Age::from_text(&a))
+        .unwrap_or_default();
     let world = generate(&WorldConfig {
         seed,
+        age,
         ..Default::default()
     });
     println!(
@@ -36,7 +41,7 @@ fn main() {
         println!(
             "  {} ({}), capital {}, {} casillas, {} gobernantes",
             c.name,
-            c.government.name(),
+            c.government.name(age),
             world.locality(c.capital).name,
             world.territory_size(c.id),
             world.rulers_of(c.id).len()

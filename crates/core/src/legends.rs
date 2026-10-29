@@ -57,8 +57,10 @@ impl World {
         let _ = writeln!(out, "# Crónica de {}\n", self.name);
         let _ = writeln!(
             out,
-            "_Desde el año {first} hasta el año {}. Semilla {}._\n",
-            self.year, self.config.seed
+            "_Desde el año {first} hasta el año {}. Semilla {}. Edad: {}._\n",
+            self.year,
+            self.config.seed,
+            self.config.age.name()
         );
 
         let _ = writeln!(out, "## El mundo\n");
@@ -109,7 +111,7 @@ impl World {
                 out,
                 "### {} ({}, año {} – {end})\n",
                 c.name,
-                c.government.name().to_lowercase(),
+                c.government.name(self.config.age).to_lowercase(),
                 c.founded
             );
             if c.exists() {
@@ -169,7 +171,8 @@ impl World {
             let _ = writeln!(
                 out,
                 "_Hechos enlazados por causa y consecuencia: guerras, intrigas, bodas, \
-                 pestes, rebeliones, dinastías y épocas de paz._\n"
+                 {}s, rebeliones, calamidades, hazañas, dinastías y épocas de paz._\n",
+                self.config.age.plague()
             );
             for kind in crate::StoryKind::ALL {
                 let of_kind: Vec<&crate::Story> =
@@ -177,7 +180,7 @@ impl World {
                 if of_kind.is_empty() {
                     continue;
                 }
-                let _ = writeln!(out, "### {}\n", kind_heading(kind));
+                let _ = writeln!(out, "### {}\n", kind_heading(kind, self.config.age));
                 for story in of_kind {
                     let end = if story.ongoing {
                         "hoy".to_string()
@@ -222,16 +225,23 @@ impl World {
     }
 }
 
-fn kind_heading(kind: crate::StoryKind) -> &'static str {
+fn kind_heading(kind: crate::StoryKind, age: crate::Age) -> &'static str {
+    use crate::Age;
     use crate::StoryKind as K;
     match kind {
         K::War => "Guerras",
         K::Rivalry => "Rivalidades",
         K::Intrigue => "Intrigas",
         K::Marriage => "Bodas",
-        K::Plague => "Pestes",
+        K::Plague => match age {
+            Age::Realistic => "Pestes",
+            Age::Fantasy => "Plagas",
+            Age::Cyberpunk => "Epidemias",
+        },
         K::Rebellion => "Rebeliones",
         K::Dynasty => "Dinastías",
         K::GoldenAge => "Épocas de paz",
+        K::Calamity => "Calamidades",
+        K::Feat => "Hazañas",
     }
 }

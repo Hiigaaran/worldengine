@@ -14,6 +14,9 @@
 //! 5. Las guerras se libran batalla a batalla; se conquistan localidades, caen
 //!    capitales y desaparecen países.
 //! 6. Los países inestables sufren rebeliones y las pestes diezman poblaciones.
+//! 7. Las calamidades propias de la edad (hambrunas, dragones, apagones...)
+//!    golpean a un país, y a veces surge alguien que las vence. Los personajes
+//!    logran hazañas: inventos, artefactos, IAs, robos de datos.
 //!
 //! Cada evento recuerda, cuando lo hay, el hecho que lo provocó (`Event::cause`):
 //! la batalla que costó una ciudad, el asesinato que desató una guerra. Con
@@ -27,6 +30,7 @@ use std::collections::BTreeSet;
 use rand::seq::SliceRandom;
 use rand::Rng as _;
 
+use crate::age::Age;
 use crate::generate::{
     add_locality, add_person, best_sites, distance2, new_country, push_event, random_government,
     site_score, travel_cost,
@@ -58,6 +62,12 @@ pub fn step(world: &mut World) {
     wage_wars(world, &mut rng);
     rebellions(world, &mut rng);
     plagues(world, &mut rng);
+    // Las calamidades y hazañas usan su propio flujo: así añadirlas no cambia
+    // el resto de la historia de cada año.
+    let mut fate = WorldRng::new(world.config.seed)
+        .stream(&format!("fate-{:?}-{}", world.config.age, world.year));
+    calamities(world, &mut fate);
+    feats(world, &mut fate);
     for c in 0..world.countries.len() {
         let country = &mut world.countries[c];
         if country.exists() {
@@ -120,8 +130,8 @@ fn death_event(world: &World, person: PersonId) -> Option<EventId> {
     })
 }
 
-/// El golpe reciente más duro que sufrió un país: una peste, el asesinato de
-/// su gobernante o una guerra perdida. Explica rebeliones y crisis.
+/// El golpe reciente más duro que sufrió un país: una peste, una calamidad, el
+/// asesinato de su gobernante o una guerra perdida. Explica rebeliones y crisis.
 fn recent_blow(world: &World, country: CountryId, years: i32) -> Option<EventId> {
     let since = world.year - years;
     world
@@ -130,7 +140,9 @@ fn recent_blow(world: &World, country: CountryId, years: i32) -> Option<EventId>
         .rev()
         .take_while(|e| e.year >= since)
         .find(|e| match e.kind {
-            EventKind::Plague { country: c, .. } => c == country,
+            EventKind::Plague { country: c, .. } | EventKind::Calamity { country: c, .. } => {
+                c == country
+            }
             EventKind::Assassinated { victim, .. } => {
                 world.rulers_of(country).iter().any(|&(_, p)| p == victim)
             }
@@ -991,8 +1003,8 @@ fn bond(world: &World, a: CountryId, b: CountryId) -> Option<EventId> {
 }
 
 /// El agravio que lleva a `attacker` a la guerra contra `defender`: un
-/// asesinato o conjura descubierta, una derrota que vengar, una secesión o
-/// una alianza traicionada, de las últimas décadas.
+/// asesinato o conjura descubierta, una derrota que vengar, una secesión, una
+/// alianza traicionada o un robo de datos, de las últimas décadas.
 fn casus_belli(world: &World, attacker: CountryId, defender: CountryId) -> Option<EventId> {
     let since = world.year - 60;
     let pair = |x: Option<CountryId>, y: Option<CountryId>| {
@@ -1022,6 +1034,11 @@ fn casus_belli(world: &World, attacker: CountryId, defender: CountryId) -> Optio
             }
             EventKind::Independence { from, country, .. } => pair(Some(from), Some(country)),
             EventKind::AllianceBroken { a, b } => pair(Some(a), Some(b)),
+            EventKind::Feat {
+                person,
+                feat: Feat::Heist,
+                target,
+            } => pair(country_of(person), target),
             _ => false,
         })
         .map(|e| e.id)
@@ -1102,14 +1119,40 @@ fn war_name(
             .max(1);
         return format!("{} {base}", ORDINALS[(earlier - 1).min(ORDINALS.len() - 1)]);
     }
+    let age = world.config.age;
+    let by_age = |realistic: &'static [&'static str],
+                  fantasy: &'static [&'static str],
+                  cyberpunk: &'static [&'static str]| match age {
+        Age::Realistic => realistic,
+        Age::Fantasy => fantasy,
+        Age::Cyberpunk => cyberpunk,
+    };
     let theme = match because.map(|e| world.events[e.index()].kind) {
         Some(EventKind::Assassinated { .. }) => pick(
             rng,
-            &["del Puñal", "de la Sangre Real", "del Veneno", "de la Daga"],
+            by_age(
+                &["del Puñal", "de la Sangre Real", "del Veneno", "de la Daga"],
+                &[
+                    "del Puñal Maldito",
+                    "de la Sangre Real",
+                    "del Veneno Élfico",
+                    "de la Daga Negra",
+                ],
+                &[
+                    "del Código Rojo",
+                    "de la Bala Fantasma",
+                    "del Veneno Digital",
+                    "del Contrato",
+                ],
+            ),
         ),
         Some(EventKind::PlotFoiled { .. }) => pick(
             rng,
-            &["de la Conjura", "de los Traidores", "de la Daga Rota"],
+            by_age(
+                &["de la Conjura", "de los Traidores", "de la Daga Rota"],
+                &["de la Conjura", "de los Traidores", "del Hechizo Roto"],
+                &["de la Conjura", "de los Topos", "de la Filtración"],
+            ),
         ),
         Some(EventKind::Independence { locality, .. }) => {
             format!(
@@ -1117,20 +1160,60 @@ fn war_name(
                 world.localities[locality.index()].name
             )
         }
-        Some(EventKind::AllianceBroken { .. }) => {
-            pick(rng, &["de la Alianza Rota", "del Juramento Roto"])
-        }
+        Some(EventKind::AllianceBroken { .. }) => pick(
+            rng,
+            by_age(
+                &["de la Alianza Rota", "del Juramento Roto"],
+                &[
+                    "de la Alianza Rota",
+                    "del Juramento Roto",
+                    "del Pacto de Sangre",
+                ],
+                &["de la Alianza Rota", "del Contrato Roto"],
+            ),
+        ),
+        Some(EventKind::Feat {
+            feat: Feat::Heist, ..
+        }) => pick(
+            rng,
+            &[
+                "de los Datos Robados",
+                "del Cortafuegos",
+                "de la Brecha",
+                "del Servidor",
+            ],
+        ),
         _ => {
             let pos = capital_pos(world, defender);
             let climate = crate::climate::year_climate(world, world.year);
             let rain = climate.at(&world.map, pos);
-            let stormy = climate.stormy[world.map.index(pos)];
+            let index = world.map.index(pos);
+            let stormy = climate.stormy[index];
+            let strange = climate.anomaly[index];
             let near_river = world
                 .map
                 .neighbors8(pos)
                 .find_map(|n| world.map.tile(n).unwrap().river);
             let biome = world.map.tile(pos).unwrap().biome;
-            if stormy {
+            if strange && age == Age::Fantasy {
+                pick(
+                    rng,
+                    &[
+                        "de las Tormentas Arcanas",
+                        "del Cielo Violeta",
+                        "de los Relámpagos Arcanos",
+                    ],
+                )
+            } else if strange && age == Age::Cyberpunk {
+                pick(
+                    rng,
+                    &[
+                        "de la Lluvia Ácida",
+                        "del Cielo Tóxico",
+                        "de la Lluvia Negra",
+                    ],
+                )
+            } else if stormy {
                 pick(
                     rng,
                     &["de las Tormentas", "del Trueno", "de los Relámpagos"],
@@ -1142,26 +1225,63 @@ fn war_name(
             } else if let (Some(river), true) = (near_river, rng.gen_bool(0.4)) {
                 format!("del {}", world.rivers[river.index()].name)
             } else {
-                let by_land: &[&str] = match biome {
-                    Biome::Forest | Biome::Jungle | Biome::Taiga => {
+                let by_land: &[&str] = match (age, biome) {
+                    (Age::Cyberpunk, Biome::Forest | Biome::Jungle | Biome::Taiga) => {
+                        &["de la Reserva", "de los Bosques Muertos"]
+                    }
+                    (Age::Fantasy, Biome::Forest | Biome::Jungle | Biome::Taiga) => {
+                        &["de los Bosques", "de la Espesura", "de los Árboles Vivos"]
+                    }
+                    (_, Biome::Forest | Biome::Jungle | Biome::Taiga) => {
                         &["de los Bosques", "de los Robles", "de la Espesura"]
                     }
-                    Biome::Hills | Biome::Mountain => &["de las Colinas", "de los Pasos"],
-                    Biome::Desert | Biome::Savanna | Biome::Shrubland => {
+                    (Age::Cyberpunk, Biome::Hills | Biome::Mountain) => {
+                        &["de las Antenas", "de las Minas"]
+                    }
+                    (Age::Fantasy, Biome::Hills | Biome::Mountain) => &[
+                        "de las Colinas",
+                        "de los Pasos",
+                        "de los Túmulos",
+                        "de las Minas Enanas",
+                    ],
+                    (_, Biome::Hills | Biome::Mountain) => &["de las Colinas", "de los Pasos"],
+                    (Age::Cyberpunk, Biome::Desert | Biome::Savanna | Biome::Shrubland) => {
+                        &["del Yermo", "de las Placas Solares", "del Polvo Rojo"]
+                    }
+                    (_, Biome::Desert | Biome::Savanna | Biome::Shrubland) => {
                         &["de las Arenas", "del Sol", "de las Cenizas"]
                     }
-                    Biome::Tundra | Biome::Glacier => &["del Invierno", "de la Escarcha"],
-                    Biome::Swamp => &["de las Ciénagas", "de la Niebla"],
-                    _ => &[
-                        "de los Cuervos",
-                        "de los Estandartes",
-                        "de las Dos Coronas",
-                        "de las Cosechas",
-                        "de las Lanzas",
-                    ],
+                    (_, Biome::Tundra | Biome::Glacier) => &["del Invierno", "de la Escarcha"],
+                    (Age::Cyberpunk, Biome::Swamp) => &["de los Vertederos", "de la Niebla Tóxica"],
+                    (_, Biome::Swamp) => &["de las Ciénagas", "de la Niebla"],
+                    _ => by_age(
+                        &[
+                            "de los Cuervos",
+                            "de los Estandartes",
+                            "de las Dos Coronas",
+                            "de las Cosechas",
+                            "de las Lanzas",
+                        ],
+                        &[
+                            "de los Cuervos",
+                            "de los Estandartes",
+                            "de las Dos Coronas",
+                            "de los Grifos",
+                            "de las Runas",
+                            "de los Dragones",
+                        ],
+                        &[
+                            "de los Drones",
+                            "de los Datos",
+                            "de las Dos Torres",
+                            "del Silicio",
+                            "del Neón",
+                            "de los Mercenarios",
+                        ],
+                    ),
                 };
                 if rng.gen_bool(0.25) {
-                    format!("de {}", names::word(rng, 2, 3))
+                    format!("de {}", names::word(rng, age, 2, 3))
                 } else {
                     pick(rng, by_land)
                 }
@@ -1170,7 +1290,7 @@ fn war_name(
     };
     let name = format!("Guerra {theme}");
     if taken(&name) {
-        format!("Guerra de {}", names::word(rng, 2, 3))
+        format!("Guerra de {}", names::word(rng, age, 2, 3))
     } else {
         name
     }
@@ -1416,7 +1536,7 @@ fn independence(world: &mut World, rng: &mut Rng, locality: LocalityId, from: Co
     let year = world.year;
     let id = CountryId(world.countries.len() as u32);
     let government = random_government(rng);
-    let country = new_country(rng, id, locality, year, government);
+    let country = new_country(rng, world.config.age, id, locality, year, government);
     world.countries.push(country);
     for other in 0..id.0 {
         let opinion = if CountryId(other) == from {
@@ -1519,4 +1639,269 @@ fn plagues(world: &mut World, rng: &mut Rng) {
         }
     }
     world.countries[c.index()].stability -= 0.15;
+}
+
+// ---------------------------------------------------------------- edades
+
+/// Una calamidad propia de la edad golpea a un país. Cuál depende del clima
+/// del año y de lo que ese país hizo antes: un grimorio prohibido puede abrir
+/// un portal, una IA puede rebelarse, los muertos de una guerra pueden alzarse.
+fn calamities(world: &mut World, rng: &mut Rng) {
+    if !rng.gen_bool(0.03) {
+        return;
+    }
+    let Some(&c) = living_countries(world).choose(rng) else {
+        return;
+    };
+    let homes = holdings(world, c);
+    if homes.is_empty() {
+        return;
+    }
+    let age = world.config.age;
+    let climate = crate::climate::year_climate(world, world.year);
+    let map = &world.map;
+    let rain = homes
+        .iter()
+        .map(|&l| climate.at(map, world.localities[l.index()].pos))
+        .sum::<f32>()
+        / homes.len() as f32;
+    // El fenómeno extraño del año solo es catastrófico si cae sobre la capital.
+    let strange = climate.anomaly[map.index(capital_pos(world, c))] && rng.gen_bool(0.5);
+    let rugged = homes.iter().any(|&l| {
+        let pos = world.localities[l.index()].pos;
+        map.neighbors8(pos)
+            .any(|n| matches!(map.tile(n).unwrap().biome, Biome::Mountain | Biome::Hills))
+    });
+    // Lo que la provocó, si hay algo: una hazaña peligrosa o una matanza.
+    let since = |years: i32| world.year - years;
+    let recent_feat = |feat: Feat| {
+        world
+            .events
+            .iter()
+            .rev()
+            .take_while(|e| e.year >= since(60))
+            .find(|e| {
+                matches!(e.kind, EventKind::Feat { person, feat: f, .. }
+                    if f == feat && world.people[person.index()].country == Some(c))
+            })
+            .map(|e| e.id)
+    };
+    let carnage = world
+        .events
+        .iter()
+        .rev()
+        .take_while(|e| e.year >= since(15))
+        .find(|e| match e.kind {
+            EventKind::Battle { locality, .. } => homes.contains(&locality),
+            EventKind::Plague { country, .. } => country == c,
+            _ => false,
+        })
+        .map(|e| e.id);
+
+    let (calamity, because) = match age {
+        Age::Realistic => {
+            let calamity = if rain < 0.85 {
+                Calamity::Famine
+            } else if rain > 1.15 {
+                Calamity::Flood
+            } else if rugged && rng.gen_bool(0.4) {
+                Calamity::Earthquake
+            } else {
+                // Una mala cosecha no necesita sequía: plagas, heladas, langostas.
+                *[Calamity::Fire, Calamity::Famine].choose(rng).unwrap()
+            };
+            (calamity, None)
+        }
+        Age::Fantasy => {
+            let grimoire = recent_feat(Feat::Grimoire);
+            if strange {
+                (Calamity::ArcaneStorm, None)
+            } else if grimoire.is_some() && rng.gen_bool(0.6) {
+                (Calamity::DemonGate, grimoire)
+            } else if carnage.is_some() && rng.gen_bool(0.5) {
+                (Calamity::Undead, carnage)
+            } else if rugged || rng.gen_bool(0.5) {
+                (Calamity::Dragon, None)
+            } else {
+                (
+                    *[Calamity::Undead, Calamity::DemonGate].choose(rng).unwrap(),
+                    None,
+                )
+            }
+        }
+        Age::Cyberpunk => {
+            let mind = recent_feat(Feat::ArtificialMind);
+            if strange {
+                (Calamity::AcidRain, None)
+            } else if mind.is_some() && rng.gen_bool(0.6) {
+                (Calamity::RogueAi, mind)
+            } else {
+                (
+                    *[Calamity::Blackout, Calamity::Meltdown, Calamity::RogueAi]
+                        .choose(rng)
+                        .unwrap(),
+                    None,
+                )
+            }
+        }
+    };
+
+    // Unas calamidades caen sobre una ciudad; otras, sobre todo el país.
+    let local = !matches!(
+        calamity,
+        Calamity::Famine | Calamity::Flood | Calamity::ArcaneStorm | Calamity::AcidRain
+    );
+    let target = if local {
+        // Los dragones prefieren aldeas y pueblos; los reactores, las grandes ciudades.
+        let pick_big = matches!(
+            calamity,
+            Calamity::Meltdown | Calamity::Blackout | Calamity::RogueAi | Calamity::Fire
+        );
+        if pick_big {
+            *homes
+                .iter()
+                .max_by_key(|&&l| (world.localities[l.index()].population, l.0))
+                .unwrap()
+        } else {
+            *homes.choose(rng).unwrap()
+        }
+    } else {
+        world.countries[c.index()].capital
+    };
+    let struck: Vec<LocalityId> = if local { vec![target] } else { homes };
+    let mut deaths = 0;
+    for &l in &struck {
+        let locality = &mut world.localities[l.index()];
+        let share = if local {
+            rng.gen_range(0.15..0.4)
+        } else {
+            rng.gen_range(0.04..0.14)
+        };
+        let lost = (locality.population as f32 * share) as u32;
+        locality.population -= lost;
+        deaths += lost;
+    }
+    let pos = world.localities[target.index()].pos;
+    let disaster = caused(
+        world,
+        EventKind::Calamity {
+            country: c,
+            calamity,
+            deaths,
+        },
+        Some(pos),
+        because,
+    );
+    world.countries[c.index()].stability -= 0.08;
+
+    let victims: Vec<PersonId> = world
+        .people
+        .iter()
+        .filter(|p| p.died.is_none() && struck.contains(&p.home))
+        .map(|p| p.id)
+        .collect();
+    let risk = if local { 0.15 } else { 0.05 };
+    for p in victims {
+        if rng.gen_bool(risk) {
+            kill(world, p, DeathCause::Calamity, Some(disaster));
+        }
+    }
+
+    // A veces alguien se alza y vence a la calamidad.
+    let chance = match age {
+        Age::Realistic => 0.35,
+        Age::Fantasy => 0.6,
+        Age::Cyberpunk => 0.5,
+    };
+    if !rng.gen_bool(chance) {
+        return;
+    }
+    let year = world.year;
+    let heroes: Vec<PersonId> = world
+        .people
+        .iter()
+        .filter(|p| p.country == Some(c) && p.died.is_none() && year - p.born >= 18)
+        .filter(|p| Feat::Rescue.roles().contains(&p.role))
+        .map(|p| p.id)
+        .collect();
+    let hero = match heroes.choose(rng) {
+        Some(&h) => h,
+        None => {
+            let born = year - rng.gen_range(18..35);
+            let person = add_person(world, rng, Role::Adventurer, target, Some(c), born, None);
+            caused(
+                world,
+                EventKind::PersonRose { person },
+                Some(pos),
+                Some(disaster),
+            );
+            person
+        }
+    };
+    caused(
+        world,
+        EventKind::Feat {
+            person: hero,
+            feat: Feat::Rescue,
+            target: None,
+        },
+        Some(pos),
+        Some(disaster),
+    );
+    world.countries[c.index()].stability += 0.08;
+}
+
+/// Los personajes logran hazañas propias de su edad: inventos y expediciones,
+/// artefactos y grimorios, IAs, implantes y robos de datos.
+fn feats(world: &mut World, rng: &mut Rng) {
+    let age = world.config.age;
+    let year = world.year;
+    for c in living_countries(world) {
+        if !rng.gen_bool(0.012) {
+            continue;
+        }
+        let feat = *age.feats().choose(rng).unwrap();
+        // El robo de datos va contra el país peor visto.
+        let target = if feat == Feat::Heist {
+            let rival = living_countries(world)
+                .into_iter()
+                .filter(|&o| o != c)
+                .filter_map(|o| {
+                    relation_index(world, c, o).map(|r| (o, world.relations[r].opinion))
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+            match rival {
+                Some((o, _)) => Some(o),
+                None => continue,
+            }
+        } else {
+            None
+        };
+        let doers: Vec<PersonId> = world
+            .people
+            .iter()
+            .filter(|p| p.country == Some(c) && p.died.is_none() && year - p.born >= 18)
+            .filter(|p| feat.roles().contains(&p.role))
+            .map(|p| p.id)
+            .collect();
+        let Some(&person) = doers.choose(rng) else {
+            continue;
+        };
+        let pos = home_pos(world, person);
+        event(
+            world,
+            EventKind::Feat {
+                person,
+                feat,
+                target,
+            },
+            Some(pos),
+        );
+        world.countries[c.index()].stability += 0.03;
+        if let Some(t) = target {
+            if let Some(r) = relation_index(world, c, t) {
+                world.relations[r].opinion = (world.relations[r].opinion - 0.35).max(-1.0);
+            }
+        }
+    }
 }

@@ -9,6 +9,7 @@
 //! assert!(!world.countries.is_empty());
 //! ```
 
+pub mod age;
 pub mod climate;
 pub mod generate;
 pub mod geography;
@@ -22,6 +23,7 @@ pub mod rng;
 pub mod simulate;
 pub mod stories;
 
+pub use age::{Age, Noun};
 pub use climate::{year_climate, YearClimate};
 pub use generate::{found, generate};
 pub use ids::*;

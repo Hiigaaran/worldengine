@@ -6,11 +6,15 @@
 //! `rainfall` de la casilla. Así sale un promedio anual: dónde llovió más que de
 //! costumbre, dónde hubo sequía y por dónde pasaron las tormentas.
 //!
-//! El clima depende solo de la semilla, el año y el mapa, así que no se guarda:
-//! se recalcula al viajar en el tiempo y siempre da lo mismo.
+//! En las edades de fantasía y cyberpunk algunos frentes son extraños: traen
+//! tormentas arcanas o lluvia ácida (ver [`crate::Age::anomaly`]).
+//!
+//! El clima depende solo de la semilla, la edad, el año y el mapa, así que no
+//! se guarda: se recalcula al viajar en el tiempo y siempre da lo mismo.
 
 use rand::Rng as _;
 
+use crate::age::Age;
 use crate::geography::{latitude, SEA_LEVEL};
 use crate::ids::*;
 use crate::model::*;
@@ -36,6 +40,9 @@ pub struct Cloud {
     pub intensity: f32,
     /// Si por ahí pasaron tormentas fuertes.
     pub storm: bool,
+    /// Si la nube trae el fenómeno extraño de la edad: tormenta arcana o
+    /// lluvia ácida.
+    pub anomaly: bool,
     /// Hacia dónde sopla el viento: 1 al este, -1 al oeste.
     pub wind: f32,
 }
@@ -56,9 +63,13 @@ pub struct YearClimate {
     pub rain: Vec<f32>,
     /// Si cada casilla sufrió tormentas fuertes.
     pub stormy: Vec<bool>,
+    /// Si a cada casilla llegó el fenómeno extraño de la edad.
+    pub anomaly: Vec<bool>,
     pub clouds: Vec<Cloud>,
     /// Frentes que llegaron a tierra como tormentas.
     pub storms: u32,
+    /// Frentes extraños (arcanos, ácidos) que llegaron a tierra.
+    pub anomalies: u32,
     pub wettest: Option<RegionRain>,
     pub driest: Option<RegionRain>,
 }
@@ -90,7 +101,15 @@ struct Front {
 pub fn year_climate(world: &World, year: Year) -> YearClimate {
     let map = &world.map;
     let (w, h) = (map.width, map.height);
-    let mut rng = WorldRng::new(world.config.seed).stream(&format!("climate-{year}"));
+    let seeds = WorldRng::new(world.config.seed);
+    let mut rng = seeds.stream(&format!("climate-{year}"));
+    // Flujo aparte para no alterar los frentes normales de la edad realista.
+    let mut odd_rng = seeds.stream(&format!("climate-anomaly-{year}"));
+    let odd_chance = match world.config.age {
+        Age::Realistic => 0.0,
+        Age::Fantasy => 0.035,
+        Age::Cyberpunk => 0.08,
+    };
     let n = map.tiles.len();
 
     // Tendencia general del año: zonas amplias algo más húmedas o secas.
@@ -99,11 +118,15 @@ pub fn year_climate(world: &World, year: Year) -> YearClimate {
 
     let mut exposure = vec![0.0f32; n];
     let mut severe = vec![0.0f32; n];
+    let mut odd = vec![0.0f32; n];
     let mut storms = 0;
+    let mut anomalies = 0;
     let fronts = rng.gen_range(140..200);
     for _ in 0..fronts {
         let mut front = new_front(&mut rng, w, h);
+        let strange = odd_chance > 0.0 && odd_rng.gen_bool(odd_chance);
         let mut landed = false;
+        let mut odd_landed = false;
         for _ in 0..front.steps {
             let (cx, cy) = (front.x, front.y);
             if cx < 0.0 || cy < 0.0 || cx >= w as f32 || cy >= h as f32 {
@@ -122,9 +145,14 @@ pub fn year_climate(world: &World, year: Year) -> YearClimate {
                     let i = (y * w + x) as usize;
                     let fall = front.moisture * falloff;
                     exposure[i] += fall;
-                    if front.severe && map.tiles[i].elevation >= SEA_LEVEL {
+                    let on_land = map.tiles[i].elevation >= SEA_LEVEL;
+                    if front.severe && on_land {
                         severe[i] += fall;
                         landed = true;
+                    }
+                    if strange && on_land {
+                        odd[i] += fall;
+                        odd_landed = true;
                     }
                 }
             }
@@ -132,6 +160,7 @@ pub fn year_climate(world: &World, year: Year) -> YearClimate {
             front.y += front.dy;
         }
         storms += u32::from(landed);
+        anomalies += u32::from(odd_landed);
     }
 
     let land: Vec<usize> = (0..n)
@@ -151,14 +180,21 @@ pub fn year_climate(world: &World, year: Year) -> YearClimate {
         .iter()
         .map(|&s| max_severe > 0.0 && s > max_severe * 0.3)
         .collect();
+    let max_odd = odd.iter().copied().fold(0.0, f32::max);
+    let anomaly: Vec<bool> = odd
+        .iter()
+        .map(|&s| max_odd > 0.0 && s > max_odd * 0.25)
+        .collect();
 
     let (wettest, driest) = extremes(world, &rain);
     YearClimate {
         year,
-        clouds: clouds(map, &rain, &stormy),
+        clouds: clouds(map, &rain, &stormy, &anomaly),
         rain,
         stormy,
+        anomaly,
         storms,
+        anomalies,
         wettest,
         driest,
     }
@@ -196,11 +232,11 @@ fn new_front(rng: &mut Rng, w: u32, h: u32) -> Front {
 
 /// Agrupa la lluvia en celdas y pone nubes en las que se mojaron más que de
 /// costumbre. Solo sobre tierra: la lluvia en alta mar no le importa a nadie.
-fn clouds(map: &WorldMap, rain: &[f32], stormy: &[bool]) -> Vec<Cloud> {
+fn clouds(map: &WorldMap, rain: &[f32], stormy: &[bool], anomaly: &[bool]) -> Vec<Cloud> {
     let mut out = Vec::new();
     for cy in 0..map.height.div_ceil(CELL) {
         for cx in 0..map.width.div_ceil(CELL) {
-            let (mut sum, mut land, mut total, mut storm) = (0.0, 0, 0, 0);
+            let (mut sum, mut land, mut total, mut storm, mut odd) = (0.0, 0, 0, 0, 0);
             let (mut sx, mut sy, mut weight) = (0.0, 0.0, 0.0);
             for y in cy * CELL..((cy + 1) * CELL).min(map.height) {
                 for x in cx * CELL..((cx + 1) * CELL).min(map.width) {
@@ -212,6 +248,7 @@ fn clouds(map: &WorldMap, rain: &[f32], stormy: &[bool]) -> Vec<Cloud> {
                     land += 1;
                     sum += rain[i];
                     storm += usize::from(stormy[i]);
+                    odd += usize::from(anomaly[i]);
                     let wgt = (rain[i] - 1.0).max(0.01);
                     sx += (x as f32 + 0.5) * wgt;
                     sy += (y as f32 + 0.5) * wgt;
@@ -223,7 +260,8 @@ fn clouds(map: &WorldMap, rain: &[f32], stormy: &[bool]) -> Vec<Cloud> {
             }
             let ratio = sum / land as f32;
             let storm = storm * 2 >= land;
-            if ratio < CLOUDY && !storm {
+            let odd = odd * 3 >= land;
+            if ratio < CLOUDY && !storm && !odd {
                 continue;
             }
             let intensity = ((ratio - 1.0) / 0.7).clamp(0.15, 1.0);
@@ -234,6 +272,7 @@ fn clouds(map: &WorldMap, rain: &[f32], stormy: &[bool]) -> Vec<Cloud> {
                 radius: CELL as f32 * (0.75 + 0.35 * intensity),
                 intensity,
                 storm,
+                anomaly: odd,
                 wind: if (1.0 / 3.0..2.0 / 3.0).contains(&lat) {
                     1.0
                 } else {
@@ -243,7 +282,9 @@ fn clouds(map: &WorldMap, rain: &[f32], stormy: &[bool]) -> Vec<Cloud> {
         }
     }
     // Las tormentas tienen algo de preferencia, sin desplazar a todas las lluvias.
-    let rank = |c: &Cloud| c.intensity + if c.storm { 0.3 } else { 0.0 };
+    let rank = |c: &Cloud| {
+        c.intensity + if c.storm { 0.3 } else { 0.0 } + if c.anomaly { 0.5 } else { 0.0 }
+    };
     out.sort_by(|a, b| rank(b).total_cmp(&rank(a)));
     out.truncate(MAX_CLOUDS);
     out
@@ -294,6 +335,23 @@ mod tests {
         let a = year_climate(&world, 10);
         assert_eq!(a, year_climate(&world, 10));
         assert_ne!(a.rain, year_climate(&world, 11).rain);
+    }
+
+    #[test]
+    fn strange_weather_follows_the_age() {
+        for age in Age::ALL {
+            let world = generate(&WorldConfig {
+                seed: 3,
+                history_years: 0,
+                age,
+                ..Default::default()
+            });
+            let odd: u32 = (0..10).map(|y| year_climate(&world, y).anomalies).sum();
+            match age {
+                Age::Realistic => assert_eq!(odd, 0),
+                _ => assert!(odd > 0, "{age:?} sin clima extraño"),
+            }
+        }
     }
 
     #[test]

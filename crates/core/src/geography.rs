@@ -13,8 +13,10 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, VecDeque};
 
+use rand::seq::SliceRandom;
 use rand::Rng as _;
 
+use crate::age::Age;
 use crate::ids::*;
 use crate::model::*;
 use crate::names;
@@ -68,8 +70,8 @@ pub fn build(config: &WorldConfig, rng: &WorldRng) -> Geography {
     let drainage = drain(&mut map, &mut rng.stream("drainage"));
     erode(&mut map);
     assign_biomes(&mut map);
-    let rivers = trace_rivers(&mut map, &drainage, &mut rng.stream("rivers"));
-    let regions = build_regions(&mut map, &mut rng.stream("regions"));
+    let rivers = trace_rivers(&mut map, &drainage, config.age, &mut rng.stream("rivers"));
+    let regions = build_regions(&mut map, config.age, &mut rng.stream("regions"));
     Geography {
         map,
         regions,
@@ -464,7 +466,7 @@ fn is_river_tile(tile: &Tile) -> bool {
 /// Convierte las casillas con mucho caudal en ríos con nombre. Cada río se
 /// sigue aguas arriba desde su desembocadura por el brazo de mayor caudal; los
 /// demás brazos son afluentes.
-fn trace_rivers(map: &mut WorldMap, drainage: &Drainage, rng: &mut Rng) -> Vec<River> {
+fn trace_rivers(map: &mut WorldMap, drainage: &Drainage, age: Age, rng: &mut Rng) -> Vec<River> {
     let n = map.tiles.len();
     let mut upstream: Vec<Vec<usize>> = vec![Vec::new(); n];
     for i in 0..n {
@@ -511,7 +513,7 @@ fn trace_rivers(map: &mut WorldMap, drainage: &Drainage, rng: &mut Rng) -> Vec<R
         let mouth = drainage.downstream[mouth_tile].unwrap_or(mouth_tile);
         rivers.push(River {
             id,
-            name: format!("Río {}", names::word(rng, 2, 3)),
+            name: format!("Río {}", names::word(rng, age, 2, 3)),
             path: path.iter().map(|&i| map.pos(i)).collect(),
             mouth: map.pos(mouth),
             flows_into: parent,
@@ -572,7 +574,7 @@ fn assign_biomes(map: &mut WorldMap) {
 // ---------------------------------------------------------------- regiones
 
 /// Agrupa casillas contiguas del mismo bioma en regiones con nombre.
-fn build_regions(map: &mut WorldMap, rng: &mut Rng) -> Vec<Region> {
+fn build_regions(map: &mut WorldMap, age: Age, rng: &mut Rng) -> Vec<Region> {
     let n = map.tiles.len();
     let mut component = vec![u32::MAX; n];
     let mut areas: Vec<u32> = Vec::new();
@@ -691,7 +693,8 @@ fn build_regions(map: &mut WorldMap, rng: &mut Rng) -> Vec<Region> {
 
     for (r, region) in regions.iter_mut().enumerate() {
         region.biome = biome_counts[r].iter().max_by_key(|(_, c)| *c).unwrap().0;
-        region.name = region_name(region.biome, &names::word(rng, 2, 3));
+        let word = names::word(rng, age, 2, 3);
+        region.name = region_name(rng, age, region.biome, &word);
         region.center = map.pos(best[r].1);
     }
     regions
@@ -710,8 +713,10 @@ fn find(parent: &mut [u32], mut x: u32) -> u32 {
     x
 }
 
-fn region_name(biome: Biome, word: &str) -> String {
-    let prefix = match biome {
+/// Nombre de una región según su paisaje. En fantasía y cyberpunk algunas
+/// regiones reciben un nombre propio de la edad: el Bosque Sombrío, el Yermo.
+fn region_name(rng: &mut Rng, age: Age, biome: Biome, word: &str) -> String {
+    let plain = match biome {
         Biome::Ocean => "Mar de",
         Biome::Coast => "Bahía de",
         Biome::Lake => "Lago",
@@ -727,6 +732,37 @@ fn region_name(biome: Biome, word: &str) -> String {
         Biome::Hills => "Colinas de",
         Biome::Mountain => "Montes de",
         Biome::Glacier => "Hielos de",
+    };
+    let themed: &[&str] = match (age, biome) {
+        (Age::Realistic, _) => &[],
+        (Age::Fantasy, Biome::Ocean) => &["Mar de las Sirenas de", "Mar Tenebroso de"],
+        (Age::Fantasy, Biome::Desert) => &["Arenas Malditas de"],
+        (Age::Fantasy, Biome::Shrubland) => &["Brezales de los Trasgos de"],
+        (Age::Fantasy, Biome::Grassland) => &["Llanuras de los Centauros de"],
+        (Age::Fantasy, Biome::Forest) => &["Bosque Sombrío de", "Arboleda Élfica de"],
+        (Age::Fantasy, Biome::Jungle) => &["Selva de los Ídolos de"],
+        (Age::Fantasy, Biome::Swamp) => &["Marjal Maldito de", "Ciénagas de las Brujas de"],
+        (Age::Fantasy, Biome::Taiga) => &["Pinares de los Lobos de"],
+        (Age::Fantasy, Biome::Hills) => &["Colinas de los Túmulos de"],
+        (Age::Fantasy, Biome::Mountain) => &["Cumbres del Dragón de", "Minas Enanas de"],
+        (Age::Fantasy, Biome::Glacier) => &["Hielos Eternos de"],
+        (Age::Cyberpunk, Biome::Ocean) => &["Mar Muerto de", "Aguas Grises de"],
+        (Age::Cyberpunk, Biome::Coast) => &["Puerto Franco de"],
+        (Age::Cyberpunk, Biome::Lake) => &["Embalse"],
+        (Age::Cyberpunk, Biome::Desert) => &["Yermo de", "Campos Solares de"],
+        (Age::Cyberpunk, Biome::Shrubland) => &["Baldíos de"],
+        (Age::Cyberpunk, Biome::Grassland) => &["Agrozona de"],
+        (Age::Cyberpunk, Biome::Forest) => &["Reserva de"],
+        (Age::Cyberpunk, Biome::Swamp) => &["Ciénagas Tóxicas de", "Vertederos de"],
+        (Age::Cyberpunk, Biome::Hills) => &["Colinas de las Antenas de"],
+        (Age::Cyberpunk, Biome::Mountain) => &["Minas de"],
+        (Age::Cyberpunk, Biome::Tundra) => &["Páramo Helado de"],
+        _ => &[],
+    };
+    let prefix = if !themed.is_empty() && rng.gen_bool(0.5) {
+        themed.choose(rng).unwrap()
+    } else {
+        plain
     };
     format!("{prefix} {word}")
 }

@@ -5,7 +5,7 @@
 //! con título y contexto.
 
 use eframe::egui::{self, RichText};
-use worldengine_core::{Event, Story, StoryId, StoryKind, Subject, World};
+use worldengine_core::{Age, Event, Story, StoryId, StoryKind, Subject, World};
 
 use crate::nav::{Nav, Page};
 
@@ -142,7 +142,10 @@ impl Legends {
                 }
                 for kind in StoryKind::ALL {
                     if ui
-                        .selectable_label(self.story_kind == Some(kind), kind.name())
+                        .selectable_label(
+                            self.story_kind == Some(kind),
+                            kind.name(world.config.age),
+                        )
                         .clicked()
                     {
                         self.story_kind = Some(kind);
@@ -176,7 +179,7 @@ impl Legends {
                     let state = if l.ruined.is_some() {
                         "ruinas"
                     } else {
-                        l.kind.name()
+                        l.kind.name(world.config.age)
                     };
                     (
                         format!("{} ({})", l.name, state.to_lowercase()),
@@ -194,7 +197,7 @@ impl Legends {
                         format!(
                             "{}, {} ({} – {died})",
                             p.name,
-                            p.role.name().to_lowercase(),
+                            p.role.name(world.config.age).to_lowercase(),
                             p.born
                         ),
                         Page::Person(p.id),
@@ -212,7 +215,7 @@ impl Legends {
                 .iter()
                 .filter(|s| self.story_kind.is_none_or(|k| s.kind == k))
                 .filter(|s| matches(&s.title) || matches(&s.summary))
-                .map(|s| (story_label(s), Page::Story(s.id)))
+                .map(|s| (story_label(s, world.config.age), Page::Story(s.id)))
                 .collect(),
         };
 
@@ -274,30 +277,42 @@ fn years(story: &Story) -> String {
     }
 }
 
-fn story_label(story: &Story) -> String {
+fn story_label(story: &Story, age: Age) -> String {
     format!(
         "{} ({}, {})",
         story.title,
-        story.kind.name().to_lowercase(),
+        story.kind.name(age).to_lowercase(),
         years(story)
     )
 }
 
 /// Las historias en que aparece una entidad, como enlaces.
-fn stories_about(ui: &mut egui::Ui, stories: &[Story], subject: Subject, nav: &mut Option<Nav>) {
+fn stories_about(
+    ui: &mut egui::Ui,
+    world: &World,
+    stories: &[Story],
+    subject: Subject,
+    nav: &mut Option<Nav>,
+) {
     let mine: Vec<&Story> = stories.iter().filter(|s| s.involves(subject)).collect();
     if mine.is_empty() {
         return;
     }
     ui.collapsing(format!("Historias ({})", mine.len()), |ui| {
         for story in mine {
-            page_link(ui, story_label(story), Page::Story(story.id), nav);
+            page_link(
+                ui,
+                story_label(story, world.config.age),
+                Page::Story(story.id),
+                nav,
+            );
         }
     });
 }
 
 fn story_links(
     ui: &mut egui::Ui,
+    age: Age,
     stories: &[Story],
     label: &str,
     ids: &[StoryId],
@@ -311,7 +326,7 @@ fn story_links(
         let story = &stories[id.index()];
         page_link(
             ui,
-            format!("  {}", story_label(story)),
+            format!("  {}", story_label(story, age)),
             Page::Story(id),
             nav,
         );
@@ -329,17 +344,42 @@ fn story_page(
         return;
     };
     ui.heading(&story.title);
-    ui.label(format!("{} · {}", story.kind.name(), years(story)));
+    ui.label(format!(
+        "{} · {}",
+        story.kind.name(world.config.age),
+        years(story)
+    ));
     ui.add_space(4.0);
     ui.label(&story.summary);
     ui.add_space(4.0);
 
     if let Some(whole) = story.part_of {
-        story_links(ui, stories, "Forma parte de", &[whole], nav);
+        story_links(
+            ui,
+            world.config.age,
+            stories,
+            "Forma parte de",
+            &[whole],
+            nav,
+        );
     }
-    story_links(ui, stories, "Capítulos", &story.chapters, nav);
-    story_links(ui, stories, "Causas", &story.causes, nav);
-    story_links(ui, stories, "Consecuencias", &story.consequences, nav);
+    story_links(
+        ui,
+        world.config.age,
+        stories,
+        "Capítulos",
+        &story.chapters,
+        nav,
+    );
+    story_links(ui, world.config.age, stories, "Causas", &story.causes, nav);
+    story_links(
+        ui,
+        world.config.age,
+        stories,
+        "Consecuencias",
+        &story.consequences,
+        nav,
+    );
 
     ui.collapsing("Protagonistas", |ui| {
         for subject in &story.subjects {
@@ -354,7 +394,11 @@ fn story_page(
                     let person = world.person(p);
                     page_link(
                         ui,
-                        format!("{}, {}", person.name, person.role.name().to_lowercase()),
+                        format!(
+                            "{}, {}",
+                            person.name,
+                            person.role.name(world.config.age).to_lowercase()
+                        ),
                         Page::Person(p),
                         nav,
                     );
@@ -403,7 +447,7 @@ fn country_page(
         .map_or("hoy".to_string(), |y| format!("año {y}"));
     ui.label(format!(
         "{} · año {} – {end}",
-        country.government.name(),
+        country.government.name(world.config.age),
         country.founded
     ));
     if country.exists() {
@@ -436,13 +480,13 @@ fn country_page(
             );
         }
     });
-    stories_about(ui, stories, Subject::Country(id), nav);
+    stories_about(ui, world, stories, Subject::Country(id), nav);
     ui.collapsing("Localidades", |ui| {
         for l in world.localities_of(id) {
             let state = if l.ruined.is_some() {
                 "ruinas"
             } else {
-                l.kind.name()
+                l.kind.name(world.config.age)
             };
             page_link(
                 ui,
@@ -477,7 +521,7 @@ fn locality_page(
         Some(year) => ui.label(format!("En ruinas desde el año {year}")),
         None => ui.label(format!(
             "{} · {} habitantes",
-            locality.kind.name(),
+            locality.kind.name(world.config.age),
             locality.population
         )),
     };
@@ -502,7 +546,7 @@ fn locality_page(
             );
         }
     });
-    stories_about(ui, stories, Subject::Locality(id), nav);
+    stories_about(ui, world, stories, Subject::Locality(id), nav);
     ui.separator();
     ui.strong("Historia");
     events(ui, world, world.events_about(Subject::Locality(id)), nav);
@@ -518,14 +562,18 @@ fn person_page(
     let person = world.person(id);
     ui.heading(&person.name);
     let life = match (person.died, person.cause_of_death) {
-        (Some(d), Some(cause)) => format!("año {} – {d}, murió {}", person.born, cause.name()),
+        (Some(d), Some(cause)) => format!(
+            "año {} – {d}, murió {}",
+            person.born,
+            cause.name(world.config.age)
+        ),
         _ => format!(
             "nacido en el año {}, vive ({} años)",
             person.born,
             world.year - person.born
         ),
     };
-    ui.label(format!("{} · {life}", person.role.name()));
+    ui.label(format!("{} · {life}", person.role.name(world.config.age)));
     ui.horizontal(|ui| {
         ui.label("Hogar:");
         page_link(
@@ -571,7 +619,7 @@ fn person_page(
             page_link(ui, format!("  {}", child.name), Page::Person(child.id), nav);
         }
     }
-    stories_about(ui, stories, Subject::Person(id), nav);
+    stories_about(ui, world, stories, Subject::Person(id), nav);
     ui.separator();
     ui.strong("Vida");
     events(ui, world, world.events_about(Subject::Person(id)), nav);
