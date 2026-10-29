@@ -1,5 +1,8 @@
 use eframe::egui;
-use worldengine_core::{generate, rng, simulate, Chronicle, Pos, World, WorldConfig, Year};
+use worldengine_core::{
+    generate, rng, simulate, year_climate, Chronicle, EventKind, Pos, World, WorldConfig, Year,
+    YearClimate,
+};
 
 use crate::details;
 use crate::legends::Legends;
@@ -32,6 +35,8 @@ pub struct App {
     show_legends: bool,
     /// Casilla seleccionada en el mapa; todo el panel de detalles parte de aquí.
     selected: Option<Pos>,
+    /// Clima del año mostrado; se recalcula al cambiar de año.
+    climate: Option<YearClimate>,
     status: String,
 }
 
@@ -48,6 +53,7 @@ impl Default for App {
             legends: Legends::default(),
             show_legends: true,
             selected: None,
+            climate: None,
             status: String::new(),
         }
     }
@@ -67,6 +73,7 @@ impl App {
         self.legends.reset();
         self.map.invalidate();
         self.selected = None;
+        self.climate = None;
         self.status = format!("Mundo «{}» generado", self.world.name);
     }
 
@@ -160,6 +167,8 @@ impl App {
                     self.map.set_mode(mode);
                 }
             }
+            ui.toggle_value(&mut self.map.show_weather, "Clima");
+            ui.toggle_value(&mut self.map.show_battles, "Batallas");
             ui.separator();
             let base = self.world.name.to_lowercase();
             if ui.button("Exportar crónica").clicked() {
@@ -241,9 +250,36 @@ impl eframe::App for App {
                 .filter_map(|e| e.location)
                 .collect()
         };
+        // Donde se combatió ese año: batallas y conquistas, sin repetir lugar.
+        let mut battles: Vec<Pos> = Vec::new();
+        for e in shown.events.iter().rev().take_while(|e| e.year >= year) {
+            let fight = matches!(
+                e.kind,
+                EventKind::Battle { .. } | EventKind::LocalityConquered { .. }
+            );
+            if let (true, true, Some(pos)) = (e.year == year, fight, e.location) {
+                if !battles.contains(&pos) {
+                    battles.push(pos);
+                }
+            }
+        }
+
+        if self.climate.as_ref().is_none_or(|c| c.year != year) {
+            self.climate = Some(year_climate(shown, year));
+        }
+        let climate = self.climate.as_ref();
+        let show_weather = self.map.show_weather;
+
         egui::CentralPanel::default().show(ctx, |ui| {
-            if let Some(pos) = self.map.show(ui, shown, self.selected, &markers) {
+            let weather = climate.filter(|_| show_weather);
+            if let Some(pos) = self
+                .map
+                .show(ui, shown, self.selected, &markers, &battles, weather)
+            {
                 navs.push(Nav::Select(pos));
+            }
+            if let Some(c) = weather {
+                climate_summary(ui, shown, c, battles.len());
             }
         });
 
@@ -251,4 +287,44 @@ impl eframe::App for App {
             self.apply(nav);
         }
     }
+}
+
+/// Resumen del clima del año en una esquina del mapa.
+fn climate_summary(ui: &egui::Ui, world: &World, climate: &YearClimate, battles: usize) {
+    let percent = |r: f32| format!("{:+.0}%", (r - 1.0) * 100.0);
+    let mut lines = vec![format!("Clima del año {}", climate.year)];
+    if let Some(w) = climate.wettest {
+        lines.push(format!(
+            "Más lluvioso: {} ({})",
+            world.region(w.region).name,
+            percent(w.ratio)
+        ));
+    }
+    if let Some(d) = climate.driest {
+        lines.push(format!(
+            "Más seco: {} ({})",
+            world.region(d.region).name,
+            percent(d.ratio)
+        ));
+    }
+    lines.push(match climate.storms {
+        0 => "Sin grandes tormentas".to_string(),
+        1 => "1 gran tormenta".to_string(),
+        n => format!("{n} grandes tormentas"),
+    });
+    if battles > 0 {
+        lines.push(format!("Combates en {battles} lugares"));
+    }
+    let rect = ui.min_rect();
+    let painter = ui.painter_at(rect);
+    let font = egui::FontId::proportional(13.0);
+    let text = lines.join("\n");
+    let galley = painter.layout_no_wrap(text, font, egui::Color32::from_gray(230));
+    let pos = rect.left_top() + egui::vec2(10.0, 10.0);
+    painter.rect_filled(
+        egui::Rect::from_min_size(pos, galley.size()).expand(6.0),
+        4.0,
+        egui::Color32::from_black_alpha(150),
+    );
+    painter.galley(pos, galley, egui::Color32::WHITE);
 }

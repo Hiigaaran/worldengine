@@ -5,6 +5,7 @@ mod details;
 mod legends;
 mod map_view;
 mod nav;
+mod overlays;
 mod render;
 mod timeline;
 

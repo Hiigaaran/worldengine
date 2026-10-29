@@ -1,8 +1,9 @@
 //! Mapa del mundo con zoom (rueda), desplazamiento (arrastrar) y selección (clic).
 
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, TextureHandle, Vec2};
-use worldengine_core::{LocalityKind, Pos, World};
+use worldengine_core::{LocalityKind, Pos, World, YearClimate};
 
+use crate::overlays;
 use crate::render::render;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +50,10 @@ pub struct MapView {
     texture: Option<TextureHandle>,
     /// Qué mundo y año está pintado en la textura; si cambia, se repinta.
     texture_key: Option<(u64, i32, usize)>,
+    /// Nubes y lluvia del año sobre el mapa.
+    pub show_weather: bool,
+    /// Explosiones donde hubo batallas en el año.
+    pub show_battles: bool,
 }
 
 impl Default for MapView {
@@ -59,6 +64,8 @@ impl Default for MapView {
             center: None,
             texture: None,
             texture_key: None,
+            show_weather: true,
+            show_battles: true,
         }
     }
 }
@@ -83,13 +90,16 @@ impl MapView {
     }
 
     /// Dibuja el mapa y devuelve la casilla clicada, si la hay. `markers` son
-    /// lugares a destacar, como los hechos del año que se está viendo.
+    /// lugares a destacar, como los hechos del año que se está viendo;
+    /// `battles`, donde se combatió ese año, y `climate`, el clima del año.
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
         world: &World,
         selected: Option<Pos>,
         markers: &[Pos],
+        battles: &[Pos],
+        climate: Option<&YearClimate>,
     ) -> Option<Pos> {
         let (w, h) = (world.map.width as f32, world.map.height as f32);
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
@@ -125,9 +135,11 @@ impl MapView {
 
         let painter = painter.with_clip_rect(rect);
         painter.rect_filled(rect, 0.0, Color32::from_rgb(10, 20, 40));
-        // Solo el mapa político cambia con los años.
-        let key = match self.mode {
-            MapMode::Political => (world.config.seed, world.year, world.events.len()),
+        // Solo el mapa político y el de lluvia (con el clima del año) cambian
+        // con los años.
+        let key = match (self.mode, climate) {
+            (MapMode::Political, _) => (world.config.seed, world.year, world.events.len()),
+            (MapMode::Rainfall, Some(c)) => (world.config.seed, c.year, usize::MAX),
             _ => (world.config.seed, 0, 0),
         };
         if self.texture_key != Some(key) {
@@ -137,7 +149,7 @@ impl MapView {
         let texture = self.texture.get_or_insert_with(|| {
             ui.ctx().load_texture(
                 "world-map",
-                render(world, self.mode),
+                render(world, self.mode, climate),
                 egui::TextureOptions::LINEAR,
             )
         });
@@ -274,6 +286,31 @@ impl MapView {
             painter.circle_stroke(p, (px * 1.2).max(9.0), Stroke::new(2.5_f32, pulse));
         }
 
+        let cursor = response.hover_pos();
+        if let (true, Some(climate)) = (self.show_weather, climate) {
+            overlays::clouds(
+                ui,
+                &painter,
+                &climate.clouds,
+                climate.year,
+                to_screen,
+                px,
+                cursor,
+            );
+        }
+        if self.show_battles && !battles.is_empty() {
+            let places: Vec<Pos2> = battles
+                .iter()
+                .map(|p| to_screen(p.x as f32 + 0.5, p.y as f32 + 0.5))
+                .collect();
+            overlays::explosions(ui, &painter, &places, px);
+        }
+        if (self.show_weather && climate.is_some_and(|c| !c.clouds.is_empty()))
+            || (self.show_battles && !battles.is_empty())
+        {
+            ui.ctx().request_repaint();
+        }
+
         if let Some(sel) = selected {
             let r = Rect::from_min_max(
                 to_screen(sel.x as f32, sel.y as f32),
@@ -293,6 +330,16 @@ impl MapView {
             }
             if let Some(owner) = tile.owner {
                 text += &format!(" · {}", world.country(owner).name);
+            }
+            if let (Some(climate), false) = (climate, tile.biome.is_water()) {
+                text += &format!(
+                    " · lluvia del año {}: {:.0}% de lo normal",
+                    climate.year,
+                    climate.at(&world.map, tile_pos) * 100.0
+                );
+                if climate.stormy[world.map.index(tile_pos)] {
+                    text += ", con tormentas";
+                }
             }
             let font = FontId::proportional(13.0);
             painter.text(

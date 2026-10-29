@@ -9,6 +9,7 @@
 //! assert!(!world.countries.is_empty());
 //! ```
 
+pub mod climate;
 pub mod generate;
 pub mod geography;
 pub mod ids;
@@ -20,6 +21,7 @@ pub mod query;
 pub mod rng;
 pub mod simulate;
 
+pub use climate::{year_climate, YearClimate};
 pub use generate::{found, generate};
 pub use ids::*;
 pub use legends::Chronicle;

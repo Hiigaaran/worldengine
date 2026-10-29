@@ -202,7 +202,7 @@ fn normalize(v: (f32, f32)) -> (f32, f32) {
 // ---------------------------------------------------------------- clima
 
 /// 0 en el ecuador (centro del mapa), 1 en los polos (bordes superior e inferior).
-fn latitude(y: u32, h: u32) -> f32 {
+pub(crate) fn latitude(y: u32, h: u32) -> f32 {
     ((y as f32 + 0.5) / h as f32 - 0.5).abs() * 2.0
 }
 

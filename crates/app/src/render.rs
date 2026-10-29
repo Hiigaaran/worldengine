@@ -4,14 +4,15 @@
 
 use eframe::egui::{Color32, ColorImage};
 use worldengine_core::geography::SEA_LEVEL;
-use worldengine_core::{Biome, World, WorldMap};
+use worldengine_core::{Biome, World, WorldMap, YearClimate};
 
 use crate::map_view::MapMode;
 
 /// Píxeles por casilla en la textura del mapa.
 pub const SUBPIXELS: usize = 4;
 
-pub fn render(world: &World, mode: MapMode) -> ColorImage {
+/// Con `climate`, el mapa de lluvia muestra la del año en vez de la normal.
+pub fn render(world: &World, mode: MapMode, climate: Option<&YearClimate>) -> ColorImage {
     let map = &world.map;
     let (w, h) = (
         map.width as usize * SUBPIXELS,
@@ -45,8 +46,12 @@ pub fn render(world: &World, mode: MapMode) -> ColorImage {
                     if tile.biome.is_sea() {
                         [30, 40, 60]
                     } else {
+                        let rain = match climate {
+                            Some(c) => sample_index(map, fx, fy, |i| c.rainfall(map, i)),
+                            None => sample(map, fx, fy, |t| t.rainfall),
+                        };
                         ramp(
-                            sample(map, fx, fy, |t| t.rainfall),
+                            rain,
                             &[
                                 [200, 170, 110],
                                 [150, 190, 90],
@@ -88,12 +93,16 @@ pub fn biome_color(biome: Biome) -> [u8; 3] {
 
 /// Valor interpolado (bilineal) entre los centros de las casillas.
 fn sample(map: &WorldMap, fx: f32, fy: f32, value: impl Fn(&worldengine_core::Tile) -> f32) -> f32 {
+    sample_index(map, fx, fy, |i| value(&map.tiles[i]))
+}
+
+/// Como [`sample`], pero el valor se pide por índice de casilla.
+fn sample_index(map: &WorldMap, fx: f32, fy: f32, value: impl Fn(usize) -> f32) -> f32 {
     let (w, h) = (map.width as i64, map.height as i64);
     let (x, y) = (fx - 0.5, fy - 0.5);
     let (x0, y0) = (x.floor(), y.floor());
     let (tx, ty) = (x - x0, y - y0);
-    let at =
-        |x: i64, y: i64| value(&map.tiles[(y.clamp(0, h - 1) * w + x.clamp(0, w - 1)) as usize]);
+    let at = |x: i64, y: i64| value((y.clamp(0, h - 1) * w + x.clamp(0, w - 1)) as usize);
     let (x0, y0) = (x0 as i64, y0 as i64);
     let top = at(x0, y0) * (1.0 - tx) + at(x0 + 1, y0) * tx;
     let bottom = at(x0, y0 + 1) * (1.0 - tx) + at(x0 + 1, y0 + 1) * tx;

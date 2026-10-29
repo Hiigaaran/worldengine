@@ -3,6 +3,16 @@
 Todas las versiones de WorldEngine. El formato sigue
 [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 
+## [Sin publicar]
+
+### Clima y batallas en el mapa
+- Clima de cada año: unas decenas de frentes de lluvia y tormentas cruzan el mapa con los vientos dominantes y se promedia cuánto llovió en cada casilla respecto a lo normal.
+- Nubes animadas con lluvia donde más llovió ese año, nubes oscuras con rayos donde hubo tormentas; se vuelven transparentes al pasar el mouse encima.
+- El modo de mapa «Lluvia» muestra la lluvia del año elegido.
+- Explosiones animadas donde hubo batallas o conquistas en el año mostrado.
+- Resumen del clima del año en el mapa (región más lluviosa, más seca, tormentas y combates) y lluvia del año al pasar el mouse por una casilla.
+- Botones «Clima» y «Batallas» para mostrar u ocultar las animaciones.
+
 ## [0.1.0] - 2026-10-28
 
 Primera versión: un generador de mundos y de su historia, inspirado en la
