@@ -5,6 +5,13 @@ Todas las versiones de WorldEngine. El formato sigue
 
 ## [Sin publicar]
 
+### Imágenes y mapa centrado
+- Retratos vectoriales de los personajes de interés, combinando el estilo de la edad (grabado sobre pergamino, cielo estrellado o neón), los atributos de su rol (corona, yelmo, capucha, sombrero de mago, visor de hacker...) y rasgos propios de cada personaje. Los muertos se ven en tonos apagados.
+- Cada tipo de evento y de historia tiene su dibujo: fundaciones, coronaciones, batallas, bodas, conjuras, pestes, cada calamidad y cada hazaña. Aparecen en la línea de tiempo, en las listas de Leyendas y en las fichas.
+- Nueva ficha de evento en Leyendas: imagen, lugar, causa, consecuencias, historias de las que forma parte y protagonistas.
+- Elegir un evento centra el mapa en su lugar; abrir una historia encuadra el mapa en el lugar más cercano al promedio de todos sus hechos y los marca con rombos dorados.
+- «Guardar imagen» exporta cualquier retrato o dibujo como SVG editable. El ejemplo `art` genera el catálogo completo de un mundo.
+
 ## [0.2.0] - 2026-10-29
 
 ### Edades
