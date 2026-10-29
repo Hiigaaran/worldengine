@@ -64,4 +64,5 @@ generación de mundos y el modo Leyendas de Dwarf Fortress.
 - Modo Leyendas: una enciclopedia de países, localidades, personajes y guerras, con fichas enlazadas entre sí y con el mapa.
 - Exportar la crónica del mundo en Markdown y el mundo completo en JSON.
 
+[0.2.0]: https://github.com/Hiigaaran/worldengine/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Hiigaaran/worldengine/releases/tag/v0.1.0
