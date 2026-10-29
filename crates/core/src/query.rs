@@ -1,6 +1,7 @@
 //! Consultas sobre el mundo, pensadas para la interfaz: qué hay en una casilla,
 //! quién vive en una localidad y qué eventos mencionan a una entidad.
 
+use crate::age::Age;
 use crate::ids::*;
 use crate::model::*;
 
@@ -93,6 +94,12 @@ impl EventKind {
                 plotter,
                 ..
             } => vec![S::Person(victim), S::Person(plotter)],
+            EventKind::Calamity { country, .. } => vec![S::Country(country)],
+            EventKind::Feat { person, target, .. } => {
+                let mut v = vec![S::Person(person)];
+                v.extend(target.map(S::Country));
+                v
+            }
         }
     }
 }
@@ -241,19 +248,26 @@ impl World {
         let country = |c: CountryId| self.country(c).name.as_str();
         let locality = |l: LocalityId| self.locality(l).name.as_str();
         let person = |p: PersonId| self.person(p).name.as_str();
+        let age = self.config.age;
+        let place = || {
+            event
+                .location
+                .and_then(|pos| self.locality_at(pos))
+                .map_or("", |l| l.name.as_str())
+        };
         match event.kind {
             EventKind::LocalityFounded { locality: l } => {
                 format!(
                     "Se funda {} ({})",
                     locality(l),
-                    self.locality(l).kind.name().to_lowercase()
+                    self.locality(l).kind.name(age).to_lowercase()
                 )
             }
             EventKind::CountryFounded { country: c } => {
                 format!(
                     "Nace {}, {}",
                     country(c),
-                    self.country(c).government.name().to_lowercase()
+                    self.country(c).government.name(age).to_lowercase()
                 )
             }
             EventKind::PersonBorn { person: p } => {
@@ -286,7 +300,7 @@ impl World {
                 format!(
                     "{}, {}, gana renombre en {}",
                     who.name,
-                    who.role.name().to_lowercase(),
+                    who.role.name(age).to_lowercase(),
                     locality(who.home)
                 )
             }
@@ -298,19 +312,19 @@ impl World {
             }
             EventKind::PersonDied { person: p, cause } => {
                 let who = self.person(p);
-                let age = event.year - who.born;
+                let years = event.year - who.born;
                 format!(
-                    "Muere {} ({}) {} a los {age} años",
+                    "Muere {} ({}) {} a los {years} años",
                     who.name,
-                    who.role.name().to_lowercase(),
-                    cause.name()
+                    who.role.name(age).to_lowercase(),
+                    cause.name(age)
                 )
             }
             EventKind::LocalityGrew { locality: l, kind } => {
                 format!(
                     "{} crece y se convierte en {}",
                     locality(l),
-                    kind.name().to_lowercase()
+                    kind.name(age).to_lowercase()
                 )
             }
             EventKind::LocalityRuined { locality: l } => {
@@ -320,7 +334,7 @@ impl World {
                 locality: l,
                 country: c,
             } => {
-                format!("La aldea de {} se une a {}", locality(l), country(c))
+                format!("{} se une a {}", locality(l), country(c))
             }
             EventKind::AllianceFormed { a, b } => {
                 format!("{} y {} sellan una alianza", country(a), country(b))
@@ -396,7 +410,11 @@ impl World {
                 )
             }
             EventKind::Plague { country: c, deaths } => {
-                format!("La peste asola {}: mueren {deaths} personas", country(c))
+                format!(
+                    "La {} asola {}: mueren {deaths} personas",
+                    age.plague(),
+                    country(c)
+                )
             }
             EventKind::Marriage { a, b, union } => {
                 let (pa, pb) = (self.person(a), self.person(b));
@@ -404,9 +422,9 @@ impl World {
                     Some((x, y)) => format!(
                         "Boda de {} ({}) y {} ({}), que une a {} y {}",
                         pa.name,
-                        pa.role.name().to_lowercase(),
+                        pa.role.name(age).to_lowercase(),
                         pb.name,
-                        pb.role.name().to_lowercase(),
+                        pb.role.name(age).to_lowercase(),
                         country(x),
                         country(y)
                     ),
@@ -423,7 +441,7 @@ impl World {
                 let mut text = format!(
                     "{} ({}) es asesinado en {}",
                     v.name,
-                    v.role.name().to_lowercase(),
+                    v.role.name(age).to_lowercase(),
                     locality(v.home)
                 );
                 if exposed {
@@ -444,6 +462,78 @@ impl World {
                     person(target),
                     motive.name()
                 )
+            }
+            EventKind::Calamity {
+                country: c,
+                calamity,
+                deaths,
+            } => {
+                let what = match calamity {
+                    Calamity::Famine => format!("La hambruna azota {}", country(c)),
+                    Calamity::Flood => format!("Las crecidas inundan {}", country(c)),
+                    Calamity::Earthquake => {
+                        format!("Un terremoto sacude {} ({})", place(), country(c))
+                    }
+                    Calamity::Fire => format!("Un gran incendio arrasa {}", place()),
+                    Calamity::Dragon => format!(
+                        "El dragón {} ataca {}",
+                        self.calamity_name(event).unwrap_or_default(),
+                        place()
+                    ),
+                    Calamity::Undead => {
+                        format!("Los muertos se alzan de sus tumbas en {}", place())
+                    }
+                    Calamity::ArcaneStorm => {
+                        format!("Una tormenta arcana desgarra el cielo de {}", country(c))
+                    }
+                    Calamity::DemonGate => format!("Se abre un portal demoníaco en {}", place()),
+                    Calamity::Blackout => format!("Un gran apagón deja a oscuras {}", place()),
+                    Calamity::RogueAi => format!(
+                        "La IA {} se rebela en {}",
+                        self.calamity_name(event).unwrap_or_default(),
+                        place()
+                    ),
+                    Calamity::AcidRain => format!("La lluvia ácida corroe {}", country(c)),
+                    Calamity::Meltdown => format!("Se funde el reactor de {}", place()),
+                };
+                format!("{what}: mueren {deaths} personas")
+            }
+            EventKind::Feat {
+                person: p,
+                feat,
+                target,
+            } => {
+                let who = self.person(p);
+                let doer = format!("{}, {},", who.name, who.role.name(age).to_lowercase());
+                let detail = self.feat_detail(event);
+                match feat {
+                    Feat::Invention => format!("{doer} inventa {detail}"),
+                    Feat::Treatise => format!("{doer} escribe {detail}"),
+                    Feat::Expedition if age == Age::Fantasy => {
+                        format!("{doer} explora las ruinas olvidadas de {detail}")
+                    }
+                    Feat::Expedition => format!("{doer} encabeza una expedición a {detail}"),
+                    Feat::Artifact => format!("{doer} forja {detail}"),
+                    Feat::Grimoire => format!("{doer} descifra {detail}"),
+                    Feat::ArtificialMind => {
+                        format!("{doer} crea {detail}, una inteligencia artificial")
+                    }
+                    Feat::Implant => format!("{doer} desarrolla {detail}"),
+                    Feat::Heist => match target {
+                        Some(t) => format!("{doer} roba los datos secretos de {}", country(t)),
+                        None => format!("{doer} da un golpe informático"),
+                    },
+                    Feat::Rescue => {
+                        let deed = event
+                            .cause
+                            .and_then(|c| match self.events[c.index()].kind {
+                                EventKind::Calamity { calamity, .. } => Some(calamity.rescue().0),
+                                _ => None,
+                            })
+                            .unwrap_or("salva a su pueblo");
+                        format!("{doer} {deed} en {}", place())
+                    }
+                }
             }
         }
     }

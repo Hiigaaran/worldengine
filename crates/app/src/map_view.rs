@@ -292,6 +292,7 @@ impl MapView {
                 ui,
                 &painter,
                 &climate.clouds,
+                world.config.age,
                 climate.year,
                 to_screen,
                 px,
@@ -303,7 +304,7 @@ impl MapView {
                 .iter()
                 .map(|p| to_screen(p.x as f32 + 0.5, p.y as f32 + 0.5))
                 .collect();
-            overlays::explosions(ui, &painter, &places, px);
+            overlays::explosions(ui, &painter, &places, px, world.config.age);
         }
         if (self.show_weather && climate.is_some_and(|c| !c.clouds.is_empty()))
             || (self.show_battles && !battles.is_empty())
@@ -337,8 +338,14 @@ impl MapView {
                     climate.year,
                     climate.at(&world.map, tile_pos) * 100.0
                 );
-                if climate.stormy[world.map.index(tile_pos)] {
+                let index = world.map.index(tile_pos);
+                if climate.stormy[index] {
                     text += ", con tormentas";
+                }
+                if let (true, Some((anomaly, _))) =
+                    (climate.anomaly[index], world.config.age.anomaly())
+                {
+                    text += &format!(", con {anomaly}");
                 }
             }
             let font = FontId::proportional(13.0);

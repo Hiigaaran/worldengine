@@ -348,3 +348,103 @@ fn json_round_trip_keeps_causes() {
     let back = World::from_json(&w.to_json().unwrap()).unwrap();
     assert_eq!(back, w);
 }
+
+fn aged(seed: u64, age: Age) -> World {
+    generate(&WorldConfig {
+        seed,
+        age,
+        ..Default::default()
+    })
+}
+
+#[test]
+fn ages_share_geography_but_not_history() {
+    let worlds: Vec<World> = Age::ALL.iter().map(|&a| aged(5, a)).collect();
+    for w in &worlds[1..] {
+        assert_eq!(
+            w.map.tiles.iter().map(|t| t.biome).collect::<Vec<_>>(),
+            worlds[0]
+                .map
+                .tiles
+                .iter()
+                .map(|t| t.biome)
+                .collect::<Vec<_>>()
+        );
+        assert_ne!(w.name, worlds[0].name);
+        assert_ne!(w.countries[0].name, worlds[0].countries[0].name);
+    }
+}
+
+#[test]
+fn each_age_has_its_own_calamities_and_feats() {
+    for age in Age::ALL {
+        let (mut calamities, mut feats) = (0, 0);
+        for seed in [1, 2, 3] {
+            let w = aged(seed, age);
+            for e in &w.events {
+                assert!(!w.describe(e).is_empty());
+                match e.kind {
+                    EventKind::Calamity { calamity, .. } => {
+                        assert!(
+                            age.calamities().contains(&calamity),
+                            "{age:?}: {calamity:?}"
+                        );
+                        calamities += 1;
+                    }
+                    EventKind::Feat { feat, .. } => {
+                        assert!(
+                            feat == Feat::Rescue || age.feats().contains(&feat),
+                            "{age:?}: {feat:?}"
+                        );
+                        feats += 1;
+                    }
+                    _ => {}
+                }
+            }
+            for s in w.stories() {
+                assert!(!s.title.is_empty() && !s.summary.is_empty());
+            }
+        }
+        assert!(calamities >= 3, "{age:?}: solo {calamities} calamidades");
+        assert!(feats >= 5, "{age:?}: solo {feats} hazañas");
+    }
+}
+
+#[test]
+fn texts_speak_the_language_of_the_age() {
+    let fantasy = aged(3, Age::Fantasy).chronicle_markdown();
+    assert!(fantasy.contains("Edad: Fantasía"));
+    let cyber = aged(3, Age::Cyberpunk);
+    let text = cyber.chronicle_markdown();
+    assert!(text.contains("Edad: Cyberpunk"));
+    assert!(
+        !text.contains("peste"),
+        "en cyberpunk hay epidemias, no pestes"
+    );
+    let names = Government::Monarchy.name(Age::Cyberpunk);
+    assert_eq!(names, "Megacorporación");
+    assert_eq!(Age::from_text(" fantasia "), Some(Age::Fantasy));
+    assert_eq!(Age::from_text("Cyberpunk"), Some(Age::Cyberpunk));
+}
+
+#[test]
+fn worlds_saved_before_ages_load_as_realistic() {
+    let w = world(2);
+    let mut value: serde_json::Value = serde_json::from_str(&w.to_json().unwrap()).unwrap();
+    value["config"].as_object_mut().unwrap().remove("age");
+    let json = value.to_string();
+    assert!(!json.contains("\"age\""));
+    assert_eq!(World::from_json(&json).unwrap().config.age, Age::Realistic);
+}
+
+#[test]
+fn chronicle_rebuilds_any_age() {
+    let config = WorldConfig {
+        seed: 6,
+        history_years: 40,
+        age: Age::Cyberpunk,
+        ..Default::default()
+    };
+    let mut chronicle = Chronicle::new(&config);
+    assert_eq!(chronicle.at(40), generate(&config));
+}

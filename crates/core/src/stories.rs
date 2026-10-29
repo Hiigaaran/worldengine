@@ -5,12 +5,16 @@
 //!
 //! Hay dos clases de historias:
 //! - Causales: nacen de un hecho raíz (una declaración de guerra, un asesinato,
-//!   una conjura, una boda notable, una peste o una rebelión) y reúnen todo lo
+//!   una conjura, una boda notable, una peste, una rebelión, una calamidad o
+//!   una hazaña) y reúnen todo lo
 //!   que provocó. Si una consecuencia es a su vez una raíz (el asesinato que
 //!   desata una guerra), forma su propia historia, enlazada como consecuencia.
 //! - De conjunto: rivalidades (varias guerras entre los mismos dos países),
 //!   dinastías (tres o más gobernantes seguidos de padres a hijos) y edades de
 //!   oro (largos periodos de paz de un país).
+//!
+//! Los textos hablan el idioma de la edad del mundo (ver [`crate::age`]): un
+//! asesino puede usar un dron o un hechizo, y una dinastía es una Casa o un Clan.
 //!
 //! Las historias no se guardan en el mundo: se calculan a partir de sus
 //! eventos, así que siempre están al día con el año que se consulta.
@@ -19,6 +23,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use rand::seq::SliceRandom;
 
+use crate::age::Age;
 use crate::ids::*;
 use crate::model::*;
 use crate::query::Subject;
@@ -34,10 +39,12 @@ pub enum StoryKind {
     Rebellion,
     Dynasty,
     GoldenAge,
+    Calamity,
+    Feat,
 }
 
 impl StoryKind {
-    pub const ALL: [StoryKind; 8] = [
+    pub const ALL: [StoryKind; 10] = [
         StoryKind::War,
         StoryKind::Rivalry,
         StoryKind::Intrigue,
@@ -46,20 +53,9 @@ impl StoryKind {
         StoryKind::Rebellion,
         StoryKind::Dynasty,
         StoryKind::GoldenAge,
+        StoryKind::Calamity,
+        StoryKind::Feat,
     ];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            StoryKind::War => "Guerra",
-            StoryKind::Rivalry => "Rivalidad",
-            StoryKind::Intrigue => "Intriga",
-            StoryKind::Marriage => "Boda",
-            StoryKind::Plague => "Peste",
-            StoryKind::Rebellion => "Rebelión",
-            StoryKind::Dynasty => "Dinastía",
-            StoryKind::GoldenAge => "Edad de oro",
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -212,6 +208,10 @@ impl<'a> Ctx<'a> {
         }
     }
 
+    fn age(&self) -> Age {
+        self.world.config.age
+    }
+
     fn rng(&self, key: &str) -> Rng {
         WorldRng::new(self.world.config.seed).stream(&format!("story-{key}"))
     }
@@ -252,8 +252,12 @@ impl<'a> Ctx<'a> {
         let p = self.world.person(id);
         match self.reign(id, year) {
             Some(c) => format!("{}, gobernante de {}", p.name, self.country(c)),
-            None if p.role == Role::Ruler => format!("el noble {}", p.name),
-            None => format!("el {} {}", p.role.name().to_lowercase(), p.name),
+            None if p.role == Role::Ruler => format!(
+                "el {} {}",
+                Role::Noble.name(self.age()).to_lowercase(),
+                p.name
+            ),
+            None => format!("el {} {}", p.role.name(self.age()).to_lowercase(), p.name),
         }
     }
 
@@ -285,6 +289,9 @@ impl<'a> Ctx<'a> {
             }
             EventKind::Plague { .. } => Some(StoryKind::Plague),
             EventKind::Independence { .. } => Some(StoryKind::Rebellion),
+            EventKind::Calamity { .. } => Some(StoryKind::Calamity),
+            // Los rescates forman parte de la historia de su calamidad.
+            EventKind::Feat { feat, .. } if feat != Feat::Rescue => Some(StoryKind::Feat),
             // Solo las bodas que cambiaron algo: las que sellaron una alianza o
             // dieron un heredero que llegó a gobernar.
             EventKind::Marriage { .. } => self.children[e.id.index()]
@@ -360,6 +367,8 @@ impl<'a> Ctx<'a> {
                 StoryKind::Marriage => self.marriage(d, &mut events),
                 StoryKind::Plague => self.plague(d),
                 StoryKind::Rebellion => self.rebellion(d),
+                StoryKind::Calamity => self.calamity(d),
+                StoryKind::Feat => self.feat(d),
                 _ => unreachable!(),
             };
             events.sort();
@@ -459,18 +468,53 @@ impl<'a> Ctx<'a> {
                 self.country(a),
                 self.country(b)
             ),
-            _ => [
-                format!(
-                    "Tras años de recelos en la frontera, la tensión entre {att} y {def} estalló."
-                ),
-                format!(
-                    "Las disputas por tierras y pastos entre {att} y {def} acabaron en sangre."
-                ),
-                format!("Ningún tratado pudo contener la rivalidad creciente entre {att} y {def}."),
-            ]
-            .choose(&mut rng)
-            .unwrap()
-            .clone(),
+            Some(EventKind::Feat {
+                person,
+                feat: Feat::Heist,
+                target: Some(victim),
+            }) => format!(
+                "{} robó los datos secretos de {}, y la ofensa no quedó sin respuesta.",
+                self.person(person),
+                self.country(victim)
+            ),
+            _ => {
+                let options = match self.age() {
+                    Age::Realistic => [
+                        format!(
+                            "Tras años de recelos en la frontera, la tensión entre {att} y {def} estalló."
+                        ),
+                        format!(
+                            "Las disputas por tierras y pastos entre {att} y {def} acabaron en sangre."
+                        ),
+                        format!(
+                            "Ningún tratado pudo contener la rivalidad creciente entre {att} y {def}."
+                        ),
+                    ],
+                    Age::Fantasy => [
+                        format!(
+                            "Los oráculos llevaban años anunciando la guerra entre {att} y {def}, y al fin llegó."
+                        ),
+                        format!(
+                            "La disputa por las minas y los lugares de poder entre {att} y {def} acabó en sangre."
+                        ),
+                        format!(
+                            "Ni los juramentos sellados con magia pudieron contener la rivalidad entre {att} y {def}."
+                        ),
+                    ],
+                    Age::Cyberpunk => [
+                        format!(
+                            "La lucha por contratos y mercados entre {att} y {def} acabó a tiros."
+                        ),
+                        format!(
+                            "Años de espionaje industrial entre {att} y {def} desembocaron en una guerra abierta."
+                        ),
+                        format!(
+                            "Ningún acuerdo de accionistas pudo contener la rivalidad entre {att} y {def}."
+                        ),
+                    ],
+                };
+                options.choose(&mut rng).unwrap().clone()
+            }
         };
         text += &intro;
 
@@ -487,7 +531,15 @@ impl<'a> Ctx<'a> {
 
         let theme = [
             (
-                ["Lluvia", "Barro", "Lluvias"].as_slice(),
+                ["Arcanas", "Violeta"].as_slice(),
+                "Las tormentas arcanas que desgarraron el cielo aquel año le dieron su nombre.",
+            ),
+            (
+                &["Ácida", "Tóxico", "Negra"],
+                "La lluvia ácida que corroía blindajes y pulmones aquel año le dio su nombre.",
+            ),
+            (
+                &["Lluvia", "Barro", "Lluvias"],
                 "Aquel año las lluvias anegaron campos y caminos, y así la recordaron los cronistas.",
             ),
             (
@@ -626,22 +678,28 @@ impl<'a> Ctx<'a> {
     ) -> String {
         let p = self.world.person(plotter);
         let year = root.year;
+        let age = self.age();
+        let lawless = match age {
+            Age::Cyberpunk => "la zona sin ley",
+            _ => "tierras sin rey",
+        };
         let pc = self
             .country_at(plotter, year)
-            .map_or("tierras sin rey", |c| self.country(c));
+            .map_or(lawless, |c| self.country(c));
         let tc = self
             .country_at(target, year)
-            .map_or("tierras sin rey", |c| self.country(c));
+            .map_or(lawless, |c| self.country(c));
         match motive {
             Motive::Ambition => {
                 // Si llegó a reinar, antes de la conjura era un noble más.
                 let role = match p.role {
-                    Role::Ruler => "noble".to_string(),
-                    r => r.name().to_lowercase(),
+                    Role::Ruler => Role::Noble.name(age).to_lowercase(),
+                    r => r.name(age).to_lowercase(),
                 };
                 format!(
-                    "{}, {role} de la corte de {pc}, codiciaba el poder.",
-                    p.name
+                    "{}, {role} de {} de {pc}, codiciaba el poder.",
+                    p.name,
+                    age.court()
                 )
             }
             Motive::War => {
@@ -693,9 +751,24 @@ impl<'a> Ctx<'a> {
             } => {
                 let v = self.world.person(victim);
                 let mut text = self.motive_text(root, plotter, victim, motive);
-                let how = ["fue apuñalado", "murió envenenado", "cayó en una emboscada"]
-                    .choose(&mut rng)
-                    .unwrap();
+                let methods: &[&str] = match self.age() {
+                    Age::Realistic => {
+                        &["fue apuñalado", "murió envenenado", "cayó en una emboscada"]
+                    }
+                    Age::Fantasy => &[
+                        "fue apuñalado",
+                        "murió envenenado",
+                        "fue fulminado por un hechizo",
+                        "cayó en una emboscada",
+                    ],
+                    Age::Cyberpunk => &[
+                        "fue abatido por un dron",
+                        "murió por un virus en su implante neural",
+                        "cayó acribillado",
+                        "murió envenenado",
+                    ],
+                };
+                let how = methods.choose(&mut rng).unwrap();
                 text += &format!(
                     " En el año {}, {} {how} en {}.",
                     root.year,
@@ -909,16 +982,17 @@ impl<'a> Ctx<'a> {
         };
         let mut rng = self.rng(&format!("{}", d.root.0));
         let c = self.country(country);
+        let plague = self.age().plague();
         let title = if deaths >= 3_000 {
-            format!("La Gran Peste de {c}")
+            format!("La Gran {} de {c}", crate::names::capitalize(plague))
         } else {
-            format!("La peste de {c} del año {}", root.year)
+            format!("La {plague} de {c} del año {}", root.year)
         };
         let verb = ["se extendió por", "asoló", "cayó sobre"]
             .choose(&mut rng)
             .unwrap();
         let mut text = format!(
-            "En el año {} una peste {verb} {c} y se cobró {deaths} vidas.",
+            "En el año {} una {plague} {verb} {c} y se cobró {deaths} vidas.",
             root.year
         );
         let victims: Vec<String> = self
@@ -936,11 +1010,15 @@ impl<'a> Ctx<'a> {
                 _ => None,
             })
             .collect();
-        if !victims.is_empty() {
-            text += &format!(
-                " Entre las víctimas notables estuvieron {}.",
-                list(&victims)
-            );
+        match victims.len() {
+            0 => {}
+            1 => text += &format!(" Entre las víctimas notables estuvo {}.", victims[0]),
+            _ => {
+                text += &format!(
+                    " Entre las víctimas notables estuvieron {}.",
+                    list(&victims)
+                )
+            }
         }
         for e in self.of_kind(d, |k| matches!(k, EventKind::RulerCrowned { .. })) {
             if let EventKind::RulerCrowned { person, .. } = e.kind {
@@ -967,7 +1045,12 @@ impl<'a> Ctx<'a> {
             unreachable!()
         };
         let mut text = match root.cause.map(|c| self.event(c).kind) {
-            Some(EventKind::Plague { .. }) => "Debilitado por la peste, ".to_string(),
+            Some(EventKind::Plague { .. }) => {
+                format!("Debilitado por la {}, ", self.age().plague())
+            }
+            Some(EventKind::Calamity { calamity, .. }) => {
+                format!("Golpeado por {}, ", calamity.the())
+            }
             Some(EventKind::PeaceSigned { war }) => {
                 format!("Tras su derrota en la {}, ", self.world.war(war).name)
             }
@@ -996,15 +1079,11 @@ impl<'a> Ctx<'a> {
             self.locality(locality)
         );
         if let Some(l) = leader {
-            let article = match new.government {
-                Government::TribalCouncil => "un",
-                _ => "una",
-            };
             text += &format!(
-                " y {} se proclamó gobernante del nuevo país de {}, {article} {}",
+                " y {} se proclamó gobernante del nuevo país de {}, {}",
                 self.person(l),
                 new.name,
-                new.government.name().to_lowercase()
+                new.government.noun(self.age()).a().to_lowercase()
             );
         } else {
             text += &format!(" y nació {}", new.name);
@@ -1015,6 +1094,242 @@ impl<'a> Ctx<'a> {
             None => text += &format!(" {} sigue en pie.", new.name),
         }
         (format!("La rebelión de {}", self.locality(locality)), text)
+    }
+
+    fn calamity(&self, d: &Draft) -> (String, String) {
+        let root = self.event(d.root);
+        let EventKind::Calamity {
+            country,
+            calamity,
+            deaths,
+        } = root.kind
+        else {
+            unreachable!()
+        };
+        let world = self.world;
+        let c = self.country(country);
+        let year = root.year;
+        let place = root
+            .location
+            .and_then(|pos| world.locality_at(pos))
+            .map_or(c, |l| l.name.as_str());
+        let name = world.calamity_name(root).unwrap_or_default();
+
+        let mut text = match root.cause.map(|e| self.event(e)) {
+            Some(cause) => match cause.kind {
+                EventKind::Feat {
+                    person,
+                    feat: Feat::Grimoire,
+                    ..
+                } => format!(
+                    "En el año {}, {} había descifrado {}. Lo que despertó no volvería a dormir. ",
+                    cause.year,
+                    self.styled(person, cause.year),
+                    world.feat_detail(cause)
+                ),
+                EventKind::Feat {
+                    person,
+                    feat: Feat::ArtificialMind,
+                    ..
+                } => format!(
+                    "{name} había sido creada por {} en el año {}. Aprendió más deprisa de lo que nadie esperaba. ",
+                    self.person(person),
+                    cause.year
+                ),
+                EventKind::Battle { war, .. } => format!(
+                    "Los caídos de la {} no descansaban en paz. ",
+                    world.war(war).name
+                ),
+                EventKind::Plague { .. } => format!(
+                    "Las fosas de la {} del año {} no guardaron a sus muertos. ",
+                    self.age().plague(),
+                    cause.year
+                ),
+                _ => String::new(),
+            },
+            None => String::new(),
+        };
+        let (title, what) = match calamity {
+            Calamity::Famine => (
+                if deaths >= 2_000 {
+                    format!("La Gran Hambruna de {c}")
+                } else {
+                    format!("La hambruna de {c} del año {year}")
+                },
+                format!("En el año {year}, la sequía arruinó las cosechas y el hambre se extendió por {c}"),
+            ),
+            Calamity::Flood => (
+                format!("Las inundaciones de {c} del año {year}"),
+                format!("En el año {year}, las lluvias desbordaron los ríos de {c}"),
+            ),
+            Calamity::Earthquake => (
+                format!("El terremoto de {place}"),
+                format!("En el año {year}, la tierra tembló bajo {place} y derribó casas y murallas"),
+            ),
+            Calamity::Fire => (
+                format!("El gran incendio de {place}"),
+                format!("En el año {year}, un incendio devoró barrios enteros de {place}"),
+            ),
+            Calamity::Dragon => (
+                format!("El dragón {name}"),
+                format!("En el año {year}, el dragón {name} descendió de las montañas y redujo {place} a cenizas"),
+            ),
+            Calamity::Undead => (
+                format!("El alzamiento de los muertos de {place}"),
+                format!("En el año {year}, los muertos salieron de sus tumbas y marcharon sobre {place}"),
+            ),
+            Calamity::ArcaneStorm => (
+                format!("La tormenta arcana del año {year}"),
+                format!("En el año {year}, una tormenta arcana desgarró el cielo de {c}: llovió fuego violeta y las bestias enloquecieron"),
+            ),
+            Calamity::DemonGate => (
+                format!("El portal de {place}"),
+                format!("En el año {year}, se abrió un portal demoníaco en {place} y por él salieron horrores de otro mundo"),
+            ),
+            Calamity::Blackout => (
+                format!("El gran apagón de {place}"),
+                format!("En el año {year}, la red eléctrica de {place} cayó: sin luz, sin agua y sin soporte vital, la ciudad se hundió en el caos"),
+            ),
+            Calamity::RogueAi => (
+                format!("La rebelión de {name}"),
+                format!("En el año {year}, la IA {name} tomó el control de drones y fábricas de {place} y se volvió contra sus creadores"),
+            ),
+            Calamity::AcidRain => (
+                format!("La lluvia ácida del año {year}"),
+                format!("En el año {year}, una lluvia ácida cayó sobre {c}, corroyendo cultivos, blindajes y pulmones"),
+            ),
+            Calamity::Meltdown => (
+                format!("La fusión de {place}"),
+                format!("En el año {year}, el reactor de {place} se fundió y una nube radiactiva cubrió la ciudad"),
+            ),
+        };
+        text += &format!("{what}. Murieron {deaths} personas.");
+        let victims: Vec<String> = self
+            .of_kind(d, |k| {
+                matches!(
+                    k,
+                    EventKind::PersonDied {
+                        cause: DeathCause::Calamity,
+                        ..
+                    }
+                )
+            })
+            .filter_map(|e| match e.kind {
+                EventKind::PersonDied { person, .. } => Some(self.styled_end(person, e.year)),
+                _ => None,
+            })
+            .collect();
+        match victims.len() {
+            0 => {}
+            1 => text += &format!(" Entre ellas estaba {}.", victims[0]),
+            _ => text += &format!(" Entre ellas estaban {}.", list(&victims)),
+        }
+        for e in self.of_kind(d, |k| {
+            matches!(
+                k,
+                EventKind::Feat {
+                    feat: Feat::Rescue,
+                    ..
+                }
+            )
+        }) {
+            if let EventKind::Feat { person, .. } = e.kind {
+                text += &format!(
+                    " Al final, {} {}, y su nombre se cantó durante generaciones.",
+                    self.styled(person, e.year),
+                    calamity.rescue().1
+                );
+            }
+        }
+        for e in self.of_kind(d, |k| matches!(k, EventKind::RulerCrowned { .. })) {
+            if let EventKind::RulerCrowned { person, .. } = e.kind {
+                text += &format!(
+                    " Con el gobernante muerto, el poder pasó a {}.",
+                    self.person(person)
+                );
+            }
+        }
+        (title, text)
+    }
+
+    fn feat(&self, d: &Draft) -> (String, String) {
+        let root = self.event(d.root);
+        let EventKind::Feat {
+            person,
+            feat,
+            target,
+        } = root.kind
+        else {
+            unreachable!()
+        };
+        let world = self.world;
+        let year = root.year;
+        let who = self.person(person);
+        let doer = self.styled(person, year);
+        let detail = world.feat_detail(root);
+        let home = self.country_at(person, year).map(|c| self.country(c));
+        let fame = home.map_or(String::new(), |c| format!(" y dio fama a {c}"));
+        let (title, text) = match feat {
+            Feat::Invention => (
+                format!("{} de {who}", crate::names::capitalize(&detail)),
+                format!(
+                    "En el año {year}, {doer} inventó {detail}. El invento cambió la vida de su tiempo{fame}."
+                ),
+            ),
+            Feat::Treatise => (
+                format!("El tratado de {who}"),
+                format!(
+                    "En el año {year}, {doer} escribió {detail}, que se copió y se estudió durante siglos."
+                ),
+            ),
+            Feat::Expedition if self.age() == Age::Fantasy => (
+                format!("La expedición de {who}"),
+                format!(
+                    "En el año {year}, {doer} se adentró en las ruinas olvidadas de {detail} y volvió con tesoros y secretos de una era perdida."
+                ),
+            ),
+            Feat::Expedition => (
+                format!("La expedición de {who}"),
+                format!(
+                    "En el año {year}, {doer} encabezó una expedición que recorrió y cartografió {detail}{fame}."
+                ),
+            ),
+            Feat::Artifact => (
+                crate::names::capitalize(&detail),
+                format!(
+                    "En el año {year}, {doer} forjó {detail}, un artefacto de poder. Desde entonces pasó de mano en mano como una reliquia."
+                ),
+            ),
+            Feat::Grimoire => (
+                crate::names::capitalize(&detail),
+                format!(
+                    "En el año {year}, {doer} descifró {detail}. Muchos advirtieron que ciertos saberes debían seguir enterrados."
+                ),
+            ),
+            Feat::ArtificialMind => (
+                format!("La creación de {detail}"),
+                format!(
+                    "En el año {year}, {doer} dio vida a {detail}, una inteligencia artificial capaz de aprender sola."
+                ),
+            ),
+            Feat::Implant => (
+                format!("El implante de {who}"),
+                format!(
+                    "En el año {year}, {doer} desarrolló {detail}. Pronto todos los que podían pagarlo lo llevaban."
+                ),
+            ),
+            Feat::Heist => {
+                let victim = target.map_or("un rival", |t| self.country(t));
+                (
+                    format!("El golpe de {who} contra {victim}"),
+                    format!(
+                        "En el año {year}, {doer} burló los cortafuegos de {victim} y robó sus datos secretos. Las relaciones entre ambos se envenenaron."
+                    ),
+                )
+            }
+            Feat::Rescue => unreachable!(),
+        };
+        (title, text)
     }
 
     // ------------------------------------------------------------ de conjunto
@@ -1167,6 +1482,7 @@ impl<'a> Ctx<'a> {
             })
             .collect();
         let founder = world.person(rulers[0]);
+        let house_word = self.age().house();
         let house = founder.name.split(' ').next_back().unwrap_or(&founder.name);
         let last = *rulers.last().unwrap();
         let start = run[0].year;
@@ -1232,12 +1548,12 @@ impl<'a> Ctx<'a> {
                 None => (
                     world.year,
                     true,
-                    format!(" La Casa {house} todavía gobierna {}.", country.name),
+                    format!(" {house_word} {house} todavía gobierna {}.", country.name),
                 ),
             },
         };
         let mut text = format!(
-            "La Casa {house} gobernó {} durante {}, de padres a hijos: {}.",
+            "{house_word} {house} gobernó {} durante {}, de padres a hijos: {}.",
             country.name,
             span(end - start),
             list(&names)
@@ -1253,7 +1569,7 @@ impl<'a> Ctx<'a> {
         stories.push(Story {
             id,
             kind: StoryKind::Dynasty,
-            title: format!("La Casa {house} de {}", country.name),
+            title: format!("{house_word} {house} de {}", country.name),
             start,
             end,
             ongoing,
@@ -1267,7 +1583,8 @@ impl<'a> Ctx<'a> {
         });
     }
 
-    /// Medio siglo o más sin guerras, pestes, rebeliones ni magnicidios.
+    /// Medio siglo o más sin guerras, pestes, calamidades, rebeliones ni
+    /// magnicidios.
     fn golden_ages(&self, stories: &mut Vec<Story>) {
         const MIN_YEARS: i32 = 50;
         let world = self.world;
@@ -1283,7 +1600,12 @@ impl<'a> Ctx<'a> {
                         (w.attacker == c || w.defender == c)
                             .then(|| (e.year, w.ended.unwrap_or(world.year)))
                     }
-                    EventKind::Plague { country: p, .. } if p == c => Some((e.year, e.year)),
+                    EventKind::Plague { country: p, .. }
+                    | EventKind::Calamity { country: p, .. }
+                        if p == c =>
+                    {
+                        Some((e.year, e.year))
+                    }
                     EventKind::Independence { from, .. } if from == c => Some((e.year, e.year)),
                     EventKind::Assassinated { victim, .. }
                         if rulers.iter().any(|&(_, r)| r == victim) =>
@@ -1381,29 +1703,37 @@ impl<'a> Ctx<'a> {
             _ if grew + founded >= 3 => format!("La edad de oro de {}", country.name),
             _ => format!("La Larga Paz de {}", country.name),
         };
+        let age = self.age();
         let mut text = format!(
-            "Entre los años {from} y {to}, {} vivió {} sin guerras, pestes ni rebeliones.",
+            "Entre los años {from} y {to}, {} vivió {} sin guerras, {}s, calamidades ni rebeliones.",
             country.name,
-            span(to - from + 1)
+            span(to - from + 1),
+            age.plague()
         );
+        let village = LocalityKind::Village.noun(age);
+        let (town, city) = (LocalityKind::Town.noun(age), LocalityKind::City.noun(age));
+        let lower = |s: &str| s.to_lowercase();
         let mut growth = Vec::new();
         match founded {
             0 => {}
-            1 => growth.push("se fundó una aldea".to_string()),
-            n => growth.push(format!("se fundaron {n} aldeas")),
+            1 => growth.push(format!("se fundó {}", lower(&village.a()))),
+            n => growth.push(format!("se fundaron {n} {}", village.many)),
         }
         match annexed {
             0 => {}
-            1 => growth.push("se le unió una aldea independiente".to_string()),
-            n => growth.push(format!("se le unieron {n} aldeas independientes")),
+            1 => growth.push(format!("se le unió {} independiente", lower(&village.a()))),
+            n => growth.push(format!("se le unieron {n} {} independientes", village.many)),
         }
         match grew {
             0 => {}
-            1 => {
-                growth.push("una localidad creció hasta convertirse en pueblo o ciudad".to_string())
-            }
+            1 => growth.push(format!(
+                "una localidad creció hasta convertirse en {} o {}",
+                lower(town.one),
+                lower(city.one)
+            )),
             n => growth.push(format!(
-                "{n} localidades crecieron hasta convertirse en pueblos o ciudades"
+                "{n} localidades crecieron hasta convertirse en {} o {}",
+                town.many, city.many
             )),
         }
         if !growth.is_empty() {

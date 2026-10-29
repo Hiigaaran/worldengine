@@ -5,6 +5,17 @@ Todas las versiones de WorldEngine. El formato sigue
 
 ## [Sin publicar]
 
+### Edades
+- Al generar un mundo se elige su edad: **Realista**, **Fantasía** o **Cyberpunk**. La misma semilla conserva la geografía y cambia todo lo demás.
+- Nombres con el sonido de cada edad: lugares como San Treder o Puerto Tiael; Rocadragón o Kal'dor; Neo Taronok, Sector 16 o Nymusako Industrias, y personajes con alias como Kai «Cromo».
+- Gobiernos, oficios, tipos de localidad, regiones y causas de muerte propios de cada edad: reinos y hordas con magos y paladines; megacorporaciones y sindicatos de bandas con hackers y mercenarios en megaciudades.
+- Clima extraño: tormentas arcanas en fantasía y lluvia ácida en cyberpunk, con sus nubes animadas en el mapa, en el resumen del clima y al pasar el mouse.
+- Calamidades: hambrunas, inundaciones, terremotos e incendios; dragones con nombre, muertos que se alzan, tormentas arcanas y portales demoníacos; apagones, IAs rebeldes, lluvia ácida y reactores que se funden. A veces alguien se alza y las vence.
+- Hazañas: inventos, tratados y expediciones; artefactos, grimorios prohibidos y ruinas olvidadas; IAs, implantes y robos de datos que pueden desatar guerras.
+- Guerras, intrigas e historias hablan el idioma de la edad: la Guerra del Código Rojo, un asesino que usa un dron o un hechizo, la Gran Plaga o la Gran Epidemia, el Clan de una megacorporación. Nuevas historias de «Calamidad» y «Hazaña» en Leyendas y en la crónica.
+- Las explosiones de las batallas son de fuego, de magia o de neón según la edad.
+- Los mundos guardados antes de esta versión se abren como realistas.
+
 ### Enciclopedia e intrigas
 - Cada evento recuerda el hecho que lo provocó: la batalla que costó una ciudad, la muerte que dejó vacío un trono, el agravio que desató una guerra.
 - Nuevos hechos de personajes: bodas (las de casas extranjeras acercan a los países y pueden sellar alianzas; el consorte viudo puede heredar el trono), asesinatos y conjuras descubiertas por ambición, guerra, rivalidad o venganza, usurpaciones, ejecuciones y deudas de sangre que los hijos intentan saldar.

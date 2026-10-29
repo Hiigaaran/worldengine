@@ -1,7 +1,7 @@
 use eframe::egui;
 use worldengine_core::{
-    generate, rng, simulate, year_climate, Chronicle, EventKind, Pos, World, WorldConfig, Year,
-    YearClimate,
+    generate, rng, simulate, year_climate, Age, Chronicle, EventKind, Pos, World, WorldConfig,
+    Year, YearClimate,
 };
 
 use crate::details;
@@ -74,7 +74,11 @@ impl App {
         self.map.invalidate();
         self.selected = None;
         self.climate = None;
-        self.status = format!("Mundo «{}» generado", self.world.name);
+        self.status = format!(
+            "Mundo «{}» generado ({})",
+            self.world.name,
+            self.config.age.name().to_lowercase()
+        );
     }
 
     fn advance(&mut self, years: u32) {
@@ -133,11 +137,27 @@ impl App {
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading(format!("Mundo de {}", self.world.name));
+            ui.label(egui::RichText::new(self.world.config.age.name()).italics());
             ui.separator();
             ui.label("Semilla:");
             let seed = ui.add(egui::TextEdit::singleline(&mut self.seed_text).desired_width(140.0));
             let enter = seed.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if ui.button("Generar").clicked() || enter {
+            let mut regenerate = ui.button("Generar").clicked() || enter;
+            ui.label("Edad:");
+            egui::ComboBox::from_id_salt("age")
+                .selected_text(self.config.age.name())
+                .show_ui(ui, |ui| {
+                    for age in Age::ALL {
+                        let chosen = ui
+                            .selectable_value(&mut self.config.age, age, age.name())
+                            .on_hover_text(age.description());
+                        // Cambiar de edad genera de nuevo el mundo con la misma semilla.
+                        regenerate |= chosen.clicked();
+                    }
+                })
+                .response
+                .on_hover_text(self.config.age.description());
+            if regenerate {
                 self.regenerate();
             }
             ui.add(egui::Slider::new(&mut self.config.countries, 1..=16).text("países"));
@@ -312,6 +332,13 @@ fn climate_summary(ui: &egui::Ui, world: &World, climate: &YearClimate, battles:
         1 => "1 gran tormenta".to_string(),
         n => format!("{n} grandes tormentas"),
     });
+    if let Some((one, many)) = world.config.age.anomaly() {
+        lines.push(match climate.anomalies {
+            0 => format!("Sin {many}"),
+            1 => format!("1 {one}"),
+            n => format!("{n} {many}"),
+        });
+    }
     if battles > 0 {
         lines.push(format!("Combates en {battles} lugares"));
     }

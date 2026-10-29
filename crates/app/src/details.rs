@@ -59,7 +59,7 @@ fn overview(ui: &mut egui::Ui, world: &World, nav: &mut Option<Nav>) {
         let text = format!(
             "{} ({}) · {} casillas",
             country.name,
-            country.government.name(),
+            country.government.name(world.config.age),
             world.territory_size(country.id)
         );
         link_to(ui, text, world.locality(country.capital).pos, nav);
@@ -157,7 +157,11 @@ fn tile_details(ui: &mut egui::Ui, world: &World, pos: Pos, tile: &Tile, nav: &m
     if let Some(locality) = world.locality_at(pos) {
         ui.separator();
         ui.horizontal(|ui| {
-            ui.strong(format!("{}: {}", locality.kind.name(), locality.name));
+            ui.strong(format!(
+                "{}: {}",
+                locality.kind.name(world.config.age),
+                locality.name
+            ));
             open(ui, Page::Locality(locality.id), nav);
         });
         match locality.ruined {
@@ -199,7 +203,7 @@ fn country_details(ui: &mut egui::Ui, world: &World, country: &Country, nav: &mu
     });
     ui.label(format!(
         "{} · fundado en el año {}",
-        country.government.name(),
+        country.government.name(world.config.age),
         country.founded
     ));
     let capital = world.locality(country.capital);
@@ -238,7 +242,12 @@ fn country_details(ui: &mut egui::Ui, world: &World, country: &Country, nav: &mu
             .localities_of(country.id)
             .filter(|l| l.ruined.is_none())
         {
-            let text = format!("{} ({}, {} hab.)", l.name, l.kind.name(), l.population);
+            let text = format!(
+                "{} ({}, {} hab.)",
+                l.name,
+                l.kind.name(world.config.age),
+                l.population
+            );
             link_to(ui, text, l.pos, nav);
         }
     });
@@ -276,13 +285,13 @@ fn person_details(ui: &mut egui::Ui, world: &World, person: &Person, nav: &mut O
         Some(died) => format!(
             "{} ({}, {} – {died})",
             person.name,
-            person.role.name(),
+            person.role.name(world.config.age),
             person.born
         ),
         None => format!(
             "{} ({}, {} años)",
             person.name,
-            person.role.name(),
+            person.role.name(world.config.age),
             world.year - person.born
         ),
     };
