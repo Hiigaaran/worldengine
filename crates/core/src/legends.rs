@@ -163,6 +163,50 @@ impl World {
             let _ = writeln!(out);
         }
 
+        let stories = self.stories();
+        if !stories.is_empty() {
+            let _ = writeln!(out, "## Historias\n");
+            let _ = writeln!(
+                out,
+                "_Hechos enlazados por causa y consecuencia: guerras, intrigas, bodas, \
+                 pestes, rebeliones, dinastías y épocas de paz._\n"
+            );
+            for kind in crate::StoryKind::ALL {
+                let of_kind: Vec<&crate::Story> =
+                    stories.iter().filter(|s| s.kind == kind).collect();
+                if of_kind.is_empty() {
+                    continue;
+                }
+                let _ = writeln!(out, "### {}\n", kind_heading(kind));
+                for story in of_kind {
+                    let end = if story.ongoing {
+                        "hoy".to_string()
+                    } else {
+                        story.end.to_string()
+                    };
+                    let years = if story.start == story.end && !story.ongoing {
+                        format!("año {}", story.start)
+                    } else {
+                        format!("{} – {end}", story.start)
+                    };
+                    let _ = writeln!(out, "#### {} ({years})\n", story.title);
+                    let _ = writeln!(out, "{}\n", story.summary);
+                    let titles = |ids: &[crate::StoryId]| -> Vec<String> {
+                        ids.iter()
+                            .map(|id| stories[id.index()].title.clone())
+                            .collect()
+                    };
+                    if let Some(whole) = story.part_of {
+                        let _ =
+                            writeln!(out, "_Forma parte de: {}._\n", stories[whole.index()].title);
+                    }
+                    if !story.causes.is_empty() {
+                        let _ = writeln!(out, "_Causa: {}._\n", titles(&story.causes).join(", "));
+                    }
+                }
+            }
+        }
+
         // Un párrafo por año (separados por una línea en blanco).
         let _ = write!(out, "## Anales");
         let mut current = None;
@@ -175,5 +219,19 @@ impl World {
         }
         let _ = writeln!(out);
         out
+    }
+}
+
+fn kind_heading(kind: crate::StoryKind) -> &'static str {
+    use crate::StoryKind as K;
+    match kind {
+        K::War => "Guerras",
+        K::Rivalry => "Rivalidades",
+        K::Intrigue => "Intrigas",
+        K::Marriage => "Bodas",
+        K::Plague => "Pestes",
+        K::Rebellion => "Rebeliones",
+        K::Dynasty => "Dinastías",
+        K::GoldenAge => "Épocas de paz",
     }
 }

@@ -1,9 +1,11 @@
 //! Panel de Leyendas: una enciclopedia del mundo, como el modo Leyendas de
 //! Dwarf Fortress. Lista países, localidades, personajes y guerras de toda la
 //! historia, y abre la ficha de cada uno con sus vínculos y sus hechos.
+//! Las historias agrupan los hechos que se provocaron unos a otros en relatos
+//! con título y contexto.
 
 use eframe::egui::{self, RichText};
-use worldengine_core::{Event, Subject, World};
+use worldengine_core::{Event, Story, StoryId, StoryKind, Subject, World};
 
 use crate::nav::{Nav, Page};
 
@@ -13,10 +15,12 @@ enum Category {
     Localities,
     People,
     Wars,
+    Stories,
 }
 
 impl Category {
-    const ALL: [Category; 4] = [
+    const ALL: [Category; 5] = [
+        Category::Stories,
         Category::Countries,
         Category::Localities,
         Category::People,
@@ -29,6 +33,7 @@ impl Category {
             Category::Localities => "Localidades",
             Category::People => "Personajes",
             Category::Wars => "Guerras",
+            Category::Stories => "Historias",
         }
     }
 }
@@ -39,15 +44,23 @@ pub struct Legends {
     page: Option<Page>,
     /// Fichas visitadas, para el botón «Atrás».
     back: Vec<Page>,
+    /// Filtro por tipo de historia (`None`: todas).
+    story_kind: Option<StoryKind>,
+    /// Historias del mundo mostrado y la huella del mundo del que salieron.
+    stories: Vec<Story>,
+    woven_for: Option<(u64, usize)>,
 }
 
 impl Default for Legends {
     fn default() -> Self {
         Self {
-            category: Category::Countries,
+            category: Category::Stories,
             query: String::new(),
             page: None,
             back: Vec::new(),
+            story_kind: None,
+            stories: Vec::new(),
+            woven_for: None,
         }
     }
 }
@@ -68,6 +81,16 @@ impl Legends {
 
     pub fn show(&mut self, ui: &mut egui::Ui, world: &World) -> Option<Nav> {
         let mut nav = None;
+        // Tejer las historias es caro: solo se rehace si cambia el mundo.
+        let key = (world.config.seed, world.events.len());
+        if self.woven_for != Some(key) {
+            self.stories = world.stories();
+            self.woven_for = Some(key);
+            if matches!(self.page, Some(Page::Story(id)) if id.index() >= self.stories.len()) {
+                self.reset();
+            }
+        }
+        let stories = &self.stories;
         ui.heading("Leyendas");
         match self.page {
             Some(page) => {
@@ -82,10 +105,11 @@ impl Legends {
                 });
                 ui.separator();
                 egui::ScrollArea::vertical().show(ui, |ui| match page {
-                    Page::Country(id) => country_page(ui, world, id, &mut nav),
-                    Page::Locality(id) => locality_page(ui, world, id, &mut nav),
-                    Page::Person(id) => person_page(ui, world, id, &mut nav),
-                    Page::War(id) => war_page(ui, world, id, &mut nav),
+                    Page::Country(id) => country_page(ui, world, stories, id, &mut nav),
+                    Page::Locality(id) => locality_page(ui, world, stories, id, &mut nav),
+                    Page::Person(id) => person_page(ui, world, stories, id, &mut nav),
+                    Page::War(id) => war_page(ui, world, stories, id, &mut nav),
+                    Page::Story(id) => story_page(ui, world, stories, id, &mut nav),
                 });
             }
             None => self.list(ui, world, &mut nav),
@@ -108,6 +132,24 @@ impl Legends {
                 }
             }
         });
+        if self.category == Category::Stories {
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .selectable_label(self.story_kind.is_none(), "Todas")
+                    .clicked()
+                {
+                    self.story_kind = None;
+                }
+                for kind in StoryKind::ALL {
+                    if ui
+                        .selectable_label(self.story_kind == Some(kind), kind.name())
+                        .clicked()
+                    {
+                        self.story_kind = Some(kind);
+                    }
+                }
+            });
+        }
         ui.add(egui::TextEdit::singleline(&mut self.query).hint_text("Buscar por nombre…"));
         ui.separator();
 
@@ -165,6 +207,13 @@ impl Legends {
                 .filter(|w| matches(&w.name))
                 .map(|w| (format!("{} ({})", w.name, w.started), Page::War(w.id)))
                 .collect(),
+            Category::Stories => self
+                .stories
+                .iter()
+                .filter(|s| self.story_kind.is_none_or(|k| s.kind == k))
+                .filter(|s| matches(&s.title) || matches(&s.summary))
+                .map(|s| (story_label(s), Page::Story(s.id)))
+                .collect(),
         };
 
         ui.label(RichText::new(format!("{} resultados", rows.len())).weak());
@@ -215,9 +264,135 @@ fn events<'a>(
     }
 }
 
+fn years(story: &Story) -> String {
+    if story.ongoing {
+        format!("{} – hoy", story.start)
+    } else if story.start == story.end {
+        format!("año {}", story.start)
+    } else {
+        format!("{} – {}", story.start, story.end)
+    }
+}
+
+fn story_label(story: &Story) -> String {
+    format!(
+        "{} ({}, {})",
+        story.title,
+        story.kind.name().to_lowercase(),
+        years(story)
+    )
+}
+
+/// Las historias en que aparece una entidad, como enlaces.
+fn stories_about(ui: &mut egui::Ui, stories: &[Story], subject: Subject, nav: &mut Option<Nav>) {
+    let mine: Vec<&Story> = stories.iter().filter(|s| s.involves(subject)).collect();
+    if mine.is_empty() {
+        return;
+    }
+    ui.collapsing(format!("Historias ({})", mine.len()), |ui| {
+        for story in mine {
+            page_link(ui, story_label(story), Page::Story(story.id), nav);
+        }
+    });
+}
+
+fn story_links(
+    ui: &mut egui::Ui,
+    stories: &[Story],
+    label: &str,
+    ids: &[StoryId],
+    nav: &mut Option<Nav>,
+) {
+    if ids.is_empty() {
+        return;
+    }
+    ui.label(RichText::new(label).strong());
+    for &id in ids {
+        let story = &stories[id.index()];
+        page_link(
+            ui,
+            format!("  {}", story_label(story)),
+            Page::Story(id),
+            nav,
+        );
+    }
+}
+
+fn story_page(
+    ui: &mut egui::Ui,
+    world: &World,
+    stories: &[Story],
+    id: StoryId,
+    nav: &mut Option<Nav>,
+) {
+    let Some(story) = stories.get(id.index()) else {
+        return;
+    };
+    ui.heading(&story.title);
+    ui.label(format!("{} · {}", story.kind.name(), years(story)));
+    ui.add_space(4.0);
+    ui.label(&story.summary);
+    ui.add_space(4.0);
+
+    if let Some(whole) = story.part_of {
+        story_links(ui, stories, "Forma parte de", &[whole], nav);
+    }
+    story_links(ui, stories, "Capítulos", &story.chapters, nav);
+    story_links(ui, stories, "Causas", &story.causes, nav);
+    story_links(ui, stories, "Consecuencias", &story.consequences, nav);
+
+    ui.collapsing("Protagonistas", |ui| {
+        for subject in &story.subjects {
+            match *subject {
+                Subject::Country(c) => page_link(
+                    ui,
+                    format!("País: {}", world.country(c).name),
+                    Page::Country(c),
+                    nav,
+                ),
+                Subject::Person(p) => {
+                    let person = world.person(p);
+                    page_link(
+                        ui,
+                        format!("{}, {}", person.name, person.role.name().to_lowercase()),
+                        Page::Person(p),
+                        nav,
+                    );
+                }
+                Subject::War(w) => page_link(ui, &world.war(w).name, Page::War(w), nav),
+                Subject::Locality(_) => {}
+            }
+        }
+    });
+    let places: Vec<_> = story
+        .subjects
+        .iter()
+        .filter_map(|s| match *s {
+            Subject::Locality(l) => Some(l),
+            _ => None,
+        })
+        .collect();
+    if !places.is_empty() {
+        ui.collapsing(format!("Lugares ({})", places.len()), |ui| {
+            for l in places {
+                page_link(ui, &world.locality(l).name, Page::Locality(l), nav);
+            }
+        });
+    }
+    ui.separator();
+    ui.strong("Hechos");
+    events(
+        ui,
+        world,
+        story.events.iter().map(|&e| &world.events[e.index()]),
+        nav,
+    );
+}
+
 fn country_page(
     ui: &mut egui::Ui,
     world: &World,
+    stories: &[Story],
     id: worldengine_core::CountryId,
     nav: &mut Option<Nav>,
 ) {
@@ -261,6 +436,7 @@ fn country_page(
             );
         }
     });
+    stories_about(ui, stories, Subject::Country(id), nav);
     ui.collapsing("Localidades", |ui| {
         for l in world.localities_of(id) {
             let state = if l.ruined.is_some() {
@@ -291,6 +467,7 @@ fn country_page(
 fn locality_page(
     ui: &mut egui::Ui,
     world: &World,
+    stories: &[Story],
     id: worldengine_core::LocalityId,
     nav: &mut Option<Nav>,
 ) {
@@ -325,6 +502,7 @@ fn locality_page(
             );
         }
     });
+    stories_about(ui, stories, Subject::Locality(id), nav);
     ui.separator();
     ui.strong("Historia");
     events(ui, world, world.events_about(Subject::Locality(id)), nav);
@@ -333,6 +511,7 @@ fn locality_page(
 fn person_page(
     ui: &mut egui::Ui,
     world: &World,
+    stories: &[Story],
     id: worldengine_core::PersonId,
     nav: &mut Option<Nav>,
 ) {
@@ -368,6 +547,23 @@ fn person_page(
             page_link(ui, &world.person(parent).name, Page::Person(parent), nav);
         });
     }
+    if let Some(spouse) = person.spouse {
+        ui.horizontal(|ui| {
+            ui.label("Cónyuge:");
+            page_link(ui, &world.person(spouse).name, Page::Person(spouse), nav);
+        });
+    }
+    if let Some(grudge) = person.grudge {
+        ui.horizontal(|ui| {
+            ui.label("Ha jurado vengarse de");
+            page_link(
+                ui,
+                &world.person(grudge.against).name,
+                Page::Person(grudge.against),
+                nav,
+            );
+        });
+    }
     let children: Vec<_> = world.children_of(id).collect();
     if !children.is_empty() {
         ui.label("Descendencia:");
@@ -375,14 +571,29 @@ fn person_page(
             page_link(ui, format!("  {}", child.name), Page::Person(child.id), nav);
         }
     }
+    stories_about(ui, stories, Subject::Person(id), nav);
     ui.separator();
     ui.strong("Vida");
     events(ui, world, world.events_about(Subject::Person(id)), nav);
 }
 
-fn war_page(ui: &mut egui::Ui, world: &World, id: worldengine_core::WarId, nav: &mut Option<Nav>) {
+fn war_page(
+    ui: &mut egui::Ui,
+    world: &World,
+    stories: &[Story],
+    id: worldengine_core::WarId,
+    nav: &mut Option<Nav>,
+) {
     let war = world.war(id);
     ui.heading(&war.name);
+    // La guerra como relato, con su contexto.
+    let story = stories
+        .iter()
+        .find(|s| s.kind == StoryKind::War && s.involves(Subject::War(id)));
+    if let Some(story) = story {
+        ui.label(&story.summary);
+        page_link(ui, "Abrir su historia", Page::Story(story.id), nav);
+    }
     let end = war
         .ended
         .map_or("en curso".to_string(), |y| format!("año {y}"));

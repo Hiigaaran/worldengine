@@ -5,6 +5,14 @@ Todas las versiones de WorldEngine. El formato sigue
 
 ## [Sin publicar]
 
+### Enciclopedia e intrigas
+- Cada evento recuerda el hecho que lo provocó: la batalla que costó una ciudad, la muerte que dejó vacío un trono, el agravio que desató una guerra.
+- Nuevos hechos de personajes: bodas (las de casas extranjeras acercan a los países y pueden sellar alianzas; el consorte viudo puede heredar el trono), asesinatos y conjuras descubiertas por ambición, guerra, rivalidad o venganza, usurpaciones, ejecuciones y deudas de sangre que los hijos intentan saldar.
+- Las guerras estallan por motivos concretos (un asesino descubierto, una derrota que vengar, una secesión, una alianza rota) y reciben nombres según su causa o el tiempo de aquel año: la Guerra de la Lluvia, la Guerra del Puñal, la Segunda Guerra de los Robles…
+- Historias: los eventos se agrupan en relatos con título y texto de contexto. Guerras, rivalidades entre dos países, intrigas, bodas, pestes, rebeliones, dinastías y épocas de paz, enlazadas por causas y consecuencias.
+- En Leyendas, nueva categoría «Historias» (con filtro por tipo) y ficha de cada historia; las fichas de países, localidades, personajes y guerras muestran sus historias.
+- La crónica exportada incluye una sección «Historias».
+
 ### Clima y batallas en el mapa
 - Clima de cada año: unas decenas de frentes de lluvia y tormentas cruzan el mapa con los vientos dominantes y se promedia cuánto llovió en cada casilla respecto a lo normal.
 - Nubes animadas con lluvia donde más llovió ese año, nubes oscuras con rayos donde hubo tormentas; se vuelven transparentes al pasar el mouse encima.

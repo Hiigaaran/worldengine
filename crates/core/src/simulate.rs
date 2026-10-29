@@ -7,11 +7,17 @@
 //! 2. Los países extienden sus fronteras y fundan nuevas aldeas.
 //! 3. Los personajes envejecen y mueren; nacen herederos y nuevas figuras. Al
 //!    morir un gobernante, la sucesión depende del tipo de gobierno.
+//!    Los nobles se casan (a veces con casas extranjeras, acercando a sus
+//!    países) y se traman conjuras: usurpadores, enemigos y vengadores.
 //! 4. Las relaciones cambian: los vecinos acumulan tensiones, se forman y rompen
 //!    alianzas, y estallan guerras.
 //! 5. Las guerras se libran batalla a batalla; se conquistan localidades, caen
 //!    capitales y desaparecen países.
 //! 6. Los países inestables sufren rebeliones y las pestes diezman poblaciones.
+//!
+//! Cada evento recuerda, cuando lo hay, el hecho que lo provocó (`Event::cause`):
+//! la batalla que costó una ciudad, el asesinato que desató una guerra. Con
+//! esos vínculos se tejen las historias de [`crate::stories`].
 //!
 //! Cada año usa su propio flujo aleatorio, así que simular 100 años y luego 50
 //! más da exactamente el mismo mundo que simular 150 de una vez.
@@ -46,6 +52,8 @@ pub fn step(world: &mut World) {
     colonize(world, &mut rng);
     age_people(world, &mut rng);
     births(world, &mut rng);
+    marriages(world, &mut rng);
+    intrigues(world, &mut rng);
     diplomacy(world, &mut rng);
     wage_wars(world, &mut rng);
     rebellions(world, &mut rng);
@@ -71,9 +79,69 @@ pub fn step(world: &mut World) {
 
 // ---------------------------------------------------------------- utilidades
 
-fn event(world: &mut World, kind: EventKind, location: Option<Pos>) {
+fn event(world: &mut World, kind: EventKind, location: Option<Pos>) -> EventId {
+    caused(world, kind, location, None)
+}
+
+/// Registra un evento provocado por otro.
+fn caused(
+    world: &mut World,
+    kind: EventKind,
+    location: Option<Pos>,
+    cause: Option<EventId>,
+) -> EventId {
     let year = world.year;
-    push_event(world, year, kind, location);
+    let id = push_event(world, year, kind, location);
+    world.events[id.index()].cause = cause;
+    id
+}
+
+fn home_pos(world: &World, person: PersonId) -> Pos {
+    world.localities[world.people[person.index()].home.index()].pos
+}
+
+fn ruler_of(world: &World, person: PersonId) -> Option<CountryId> {
+    world
+        .countries
+        .iter()
+        .find(|c| c.exists() && c.ruler == Some(person))
+        .map(|c| c.id)
+}
+
+/// El evento en que murió un personaje.
+fn death_event(world: &World, person: PersonId) -> Option<EventId> {
+    world.events.iter().rev().find_map(|e| match e.kind {
+        EventKind::PersonDied { person: p, .. } | EventKind::Assassinated { victim: p, .. }
+            if p == person =>
+        {
+            Some(e.id)
+        }
+        _ => None,
+    })
+}
+
+/// El golpe reciente más duro que sufrió un país: una peste, el asesinato de
+/// su gobernante o una guerra perdida. Explica rebeliones y crisis.
+fn recent_blow(world: &World, country: CountryId, years: i32) -> Option<EventId> {
+    let since = world.year - years;
+    world
+        .events
+        .iter()
+        .rev()
+        .take_while(|e| e.year >= since)
+        .find(|e| match e.kind {
+            EventKind::Plague { country: c, .. } => c == country,
+            EventKind::Assassinated { victim, .. } => {
+                world.rulers_of(country).iter().any(|&(_, p)| p == victim)
+            }
+            EventKind::PeaceSigned { war } => {
+                let w = &world.wars[war.index()];
+                (w.attacker == country || w.defender == country)
+                    && w.winner.is_some_and(|winner| winner != country)
+            }
+            _ => false,
+        })
+        .map(|e| e.id)
 }
 
 fn living_countries(world: &World) -> Vec<CountryId> {
@@ -158,15 +226,25 @@ fn borders(world: &World) -> BTreeSet<(CountryId, CountryId)> {
     pairs
 }
 
-fn kill(world: &mut World, person: PersonId, cause: DeathCause) {
+fn kill(
+    world: &mut World,
+    person: PersonId,
+    cause: DeathCause,
+    because: Option<EventId>,
+) -> Option<EventId> {
     let p = &mut world.people[person.index()];
     if p.died.is_some() {
-        return;
+        return None;
     }
     p.died = Some(world.year);
     p.cause_of_death = Some(cause);
     let pos = world.localities[p.home.index()].pos;
-    event(world, EventKind::PersonDied { person, cause }, Some(pos));
+    Some(caused(
+        world,
+        EventKind::PersonDied { person, cause },
+        Some(pos),
+        because,
+    ))
 }
 
 // ---------------------------------------------------------------- población
@@ -323,19 +401,7 @@ fn age_people(world: &mut World, rng: &mut Rng) {
             } else {
                 DeathCause::Illness
             };
-            kill(world, person, cause);
-            continue;
-        }
-        // Los gobernantes de países inestables pueden ser asesinados.
-        let ruled = world
-            .countries
-            .iter()
-            .find(|c| c.exists() && c.ruler == Some(person))
-            .map(|c| c.stability);
-        if let Some(stability) = ruled {
-            if stability < 0.4 && rng.gen_bool(0.03) {
-                kill(world, person, DeathCause::Assassination);
-            }
+            kill(world, person, cause, None);
         }
     }
 }
@@ -351,11 +417,21 @@ fn births(world: &mut World, rng: &mut Rng) {
                 .filter(|p| p.parent == Some(ruler))
                 .count();
             let fertile = (18..50).contains(&age(world, ruler));
-            if fertile && children < 4 && rng.gen_bool(0.12) {
+            let marriage = world.people[ruler.index()]
+                .spouse
+                .filter(|s| world.people[s.index()].died.is_none())
+                .and_then(|_| marriage_of(world, ruler));
+            let chance = if marriage.is_some() { 0.18 } else { 0.06 };
+            if fertile && children < 4 && rng.gen_bool(chance) {
                 let pos = world.localities[capital.index()].pos;
                 let child =
                     add_person(world, rng, Role::Noble, capital, Some(c), year, Some(ruler));
-                event(world, EventKind::PersonBorn { person: child }, Some(pos));
+                caused(
+                    world,
+                    EventKind::PersonBorn { person: child },
+                    Some(pos),
+                    marriage,
+                );
             }
         }
 
@@ -411,8 +487,9 @@ fn births(world: &mut World, rng: &mut Rng) {
     }
 }
 
-/// Elige al nuevo gobernante según el tipo de gobierno.
-fn succession(world: &mut World, rng: &mut Rng, c: CountryId) {
+/// Elige al nuevo gobernante según el tipo de gobierno. `because` es lo que
+/// dejó vacío el trono (normalmente, la muerte del anterior).
+fn succession(world: &mut World, rng: &mut Rng, c: CountryId, because: Option<EventId>) {
     let country = &world.countries[c.index()];
     let previous = country.ruler;
     let government = country.government;
@@ -443,7 +520,13 @@ fn succession(world: &mut World, rng: &mut Rng, c: CountryId) {
                 .copied()
                 .filter(|&p| previous.is_some() && world.people[p.index()].parent == previous)
                 .collect();
-            eldest(children).or_else(|| eldest(with_role(&[Role::Noble])))
+            // Sin hijos, hereda el consorte viudo; si no, el noble de más edad.
+            let consort = previous
+                .and_then(|p| world.people[p.index()].spouse)
+                .filter(|s| candidates.contains(s));
+            eldest(children)
+                .or(consort)
+                .or_else(|| eldest(with_role(&[Role::Noble])))
         }
         Government::Republic => with_role(&[Role::Noble, Role::Merchant, Role::Scholar])
             .choose(rng)
@@ -469,20 +552,28 @@ fn succession(world: &mut World, rng: &mut Rng, c: CountryId) {
     let dynastic = government == Government::Monarchy
         && world.people[heir.index()].parent == previous
         && previous.is_some();
+    crown(world, c, heir, if dynastic { 0.03 } else { 0.12 }, because);
+}
+
+/// Pone a `heir` al frente de `c`, con el coste en estabilidad indicado.
+fn crown(world: &mut World, c: CountryId, heir: PersonId, unrest: f32, because: Option<EventId>) {
+    let capital = world.countries[c.index()].capital;
     let person = &mut world.people[heir.index()];
     person.role = Role::Ruler;
     person.home = capital;
+    person.country = Some(c);
     let country = &mut world.countries[c.index()];
     country.ruler = Some(heir);
-    country.stability -= if dynastic { 0.03 } else { 0.12 };
+    country.stability -= unrest;
     let pos = world.localities[capital.index()].pos;
-    event(
+    caused(
         world,
         EventKind::RulerCrowned {
             person: heir,
             country: c,
         },
         Some(pos),
+        because,
     );
 }
 
@@ -491,8 +582,314 @@ fn ensure_rulers(world: &mut World, rng: &mut Rng) {
     for c in living_countries(world) {
         let ruler = world.countries[c.index()].ruler;
         if ruler.is_none_or(|r| world.people[r.index()].died.is_some()) {
-            succession(world, rng, c);
+            let because = ruler.and_then(|r| death_event(world, r));
+            succession(world, rng, c, because);
         }
+    }
+}
+
+// ---------------------------------------------------------------- intrigas
+
+/// Puede casarse: adulto joven, sin cónyuge vivo y de buena posición.
+fn marriageable(world: &World, p: &Person) -> bool {
+    p.died.is_none()
+        && (18..=45).contains(&(world.year - p.born))
+        && p.spouse
+            .is_none_or(|s| world.people[s.index()].died.is_some())
+        && matches!(
+            p.role,
+            Role::Ruler | Role::Noble | Role::General | Role::Merchant | Role::Scholar
+        )
+}
+
+fn related(a: &Person, b: &Person) -> bool {
+    a.parent == Some(b.id) || b.parent == Some(a.id) || (a.parent.is_some() && a.parent == b.parent)
+}
+
+/// La boda más reciente de un personaje.
+fn marriage_of(world: &World, person: PersonId) -> Option<EventId> {
+    world.events.iter().rev().find_map(|e| match e.kind {
+        EventKind::Marriage { a, b, .. } if a == person || b == person => Some(e.id),
+        _ => None,
+    })
+}
+
+/// Gobernantes y nobles buscan pareja. Los de la familia gobernante prefieren
+/// casas extranjeras amigas: esas bodas acercan a los países y pueden sellar
+/// alianzas.
+fn marriages(world: &mut World, rng: &mut Rng) {
+    let seekers: Vec<PersonId> = world
+        .people
+        .iter()
+        .filter(|p| matches!(p.role, Role::Ruler | Role::Noble) && marriageable(world, p))
+        .map(|p| p.id)
+        .collect();
+    for s in seekers {
+        let seeker = &world.people[s.index()];
+        if !marriageable(world, seeker) {
+            continue;
+        }
+        let Some(country) = seeker.country else {
+            continue;
+        };
+        let royal = seeker.role == Role::Ruler
+            || seeker
+                .parent
+                .is_some_and(|p| world.people[p.index()].role == Role::Ruler);
+        if !rng.gen_bool(if seeker.role == Role::Ruler {
+            0.25
+        } else {
+            0.06
+        }) {
+            continue;
+        }
+        let foreign = royal && rng.gen_bool(0.5);
+        let partners: Vec<PersonId> = world
+            .people
+            .iter()
+            .filter(|p| p.id != s && marriageable(world, p) && !related(p, seeker))
+            .filter(|p| match p.country {
+                Some(other) if foreign => {
+                    other != country
+                        && matches!(p.role, Role::Ruler | Role::Noble)
+                        && !at_war(world, country, other)
+                        && relation_index(world, country, other)
+                            .is_some_and(|r| world.relations[r].opinion > -0.2)
+                }
+                other => !foreign && other == Some(country),
+            })
+            // Dos gobernantes no se casan: cada uno sigue en su corte.
+            .filter(|p| !(p.role == Role::Ruler && seeker.role == Role::Ruler))
+            .map(|p| p.id)
+            .collect();
+        if let Some(&partner) = partners.choose(rng) {
+            marry(world, rng, s, partner);
+        }
+    }
+}
+
+fn marry(world: &mut World, rng: &mut Rng, a: PersonId, b: PersonId) {
+    // Si uno gobierna, el otro se muda a su corte.
+    let (a, b) = if world.people[b.index()].role == Role::Ruler {
+        (b, a)
+    } else {
+        (a, b)
+    };
+    let (ca, cb) = (
+        world.people[a.index()].country,
+        world.people[b.index()].country,
+    );
+    let union = match (ca, cb) {
+        (Some(x), Some(y)) if x != y => Some((x, y)),
+        _ => None,
+    };
+    world.people[a.index()].spouse = Some(b);
+    world.people[b.index()].spouse = Some(a);
+    if world.people[a.index()].role == Role::Ruler {
+        world.people[b.index()].home = world.people[a.index()].home;
+        world.people[b.index()].country = ca;
+    }
+    let pos = home_pos(world, a);
+    let wedding = event(world, EventKind::Marriage { a, b, union }, Some(pos));
+
+    if let Some((x, y)) = union {
+        if let Some(r) = relation_index(world, x, y) {
+            let relation = &mut world.relations[r];
+            relation.opinion = (relation.opinion + 0.3).min(1.0);
+            if !relation.allied && relation.opinion > 0.2 && rng.gen_bool(0.5) {
+                relation.allied = true;
+                let pos = Some(capital_pos(world, x));
+                caused(
+                    world,
+                    EventKind::AllianceFormed { a: x, b: y },
+                    pos,
+                    Some(wedding),
+                );
+            }
+        }
+    }
+}
+
+/// Conjuras: usurpadores en países inestables, gobernantes enemigos que
+/// mandan asesinos y vengadores que saldan deudas de sangre.
+fn intrigues(world: &mut World, rng: &mut Rng) {
+    for p in 0..world.people.len() {
+        let Some(grudge) = world.people[p].grudge else {
+            continue;
+        };
+        let avenger = PersonId(p as u32);
+        if world.people[p].died.is_some() || world.people[grudge.against.index()].died.is_some() {
+            world.people[p].grudge = None;
+            continue;
+        }
+        if age(world, avenger) < 18 || !rng.gen_bool(0.05) {
+            continue;
+        }
+        world.people[p].grudge = None;
+        plot(
+            world,
+            rng,
+            avenger,
+            grudge.against,
+            Motive::Revenge,
+            Some(grudge.since),
+        );
+    }
+
+    for c in living_countries(world) {
+        let Some(ruler) = world.countries[c.index()].ruler else {
+            continue;
+        };
+        if world.people[ruler.index()].died.is_some() {
+            continue;
+        }
+        let stability = world.countries[c.index()].stability;
+        if stability < 0.4 && rng.gen_bool(0.035) {
+            let ambitious: Vec<PersonId> = world
+                .people
+                .iter()
+                .filter(|p| p.country == Some(c) && p.died.is_none() && world.year - p.born >= 20)
+                .filter(|p| matches!(p.role, Role::Noble | Role::General))
+                .filter(|p| {
+                    p.parent != Some(ruler) && Some(p.id) != world.people[ruler.index()].spouse
+                })
+                .map(|p| p.id)
+                .collect();
+            if let Some(&plotter) = ambitious.choose(rng) {
+                let because = recent_blow(world, c, 10);
+                plot(world, rng, plotter, ruler, Motive::Ambition, because);
+                continue;
+            }
+        }
+        for other in living_countries(world) {
+            if other == c {
+                continue;
+            }
+            let Some(enemy) = world.countries[other.index()].ruler else {
+                continue;
+            };
+            let war = world.wars.iter().find(|w| {
+                w.ended.is_none()
+                    && ((w.attacker == c && w.defender == other)
+                        || (w.attacker == other && w.defender == c))
+            });
+            let hatred =
+                relation_index(world, c, other).is_some_and(|r| world.relations[r].opinion < -0.6);
+            let (motive, chance, because) = match war {
+                Some(w) => (Motive::War, 0.012, w.declared),
+                None if hatred => (Motive::Rivalry, 0.004, None),
+                None => continue,
+            };
+            if rng.gen_bool(chance) {
+                plot(world, rng, enemy, ruler, motive, because);
+                break;
+            }
+        }
+    }
+}
+
+/// Una conjura de `plotter` contra `target` y todas sus consecuencias.
+fn plot(
+    world: &mut World,
+    rng: &mut Rng,
+    plotter: PersonId,
+    target: PersonId,
+    motive: Motive,
+    because: Option<EventId>,
+) {
+    let pos = Some(home_pos(world, target));
+    let target_country = world.people[target.index()].country;
+    let plotter_country = world.people[plotter.index()].country;
+    let foreign = plotter_country.is_some() && plotter_country != target_country;
+    let ruled = ruler_of(world, target);
+    let success = match motive {
+        Motive::Revenge => 0.55,
+        Motive::Ambition => 0.5,
+        Motive::War | Motive::Rivalry => 0.4,
+    };
+
+    let (deed, exposed) = if rng.gen_bool(success) {
+        let exposed = rng.gen_bool(0.55);
+        let person = &mut world.people[target.index()];
+        person.died = Some(world.year);
+        person.cause_of_death = Some(DeathCause::Assassination);
+        let deed = caused(
+            world,
+            EventKind::Assassinated {
+                victim: target,
+                plotter,
+                motive,
+                exposed,
+            },
+            pos,
+            because,
+        );
+        // Los hijos del muerto juran venganza contra el culpable, si se sabe.
+        if exposed {
+            let orphans: Vec<usize> = world
+                .people
+                .iter()
+                .filter(|p| p.parent == Some(target) && p.died.is_none() && p.id != plotter)
+                .map(|p| p.id.index())
+                .collect();
+            for o in orphans {
+                world.people[o].grudge = Some(Grudge {
+                    against: plotter,
+                    since: deed,
+                });
+            }
+        }
+        if let Some(c) = ruled {
+            world.countries[c.index()].stability -= 0.1;
+            // El conspirador de la corte se queda con el trono vacante.
+            let seizes = matches!(motive, Motive::Ambition | Motive::Revenge)
+                && plotter_country == Some(c)
+                && ruler_of(world, plotter).is_none()
+                && rng.gen_bool(0.6);
+            if seizes {
+                crown(world, c, plotter, 0.15, Some(deed));
+                return;
+            }
+        }
+        (deed, exposed)
+    } else {
+        let deed = caused(
+            world,
+            EventKind::PlotFoiled {
+                target,
+                plotter,
+                motive,
+            },
+            pos,
+            because,
+        );
+        if let Some(c) = target_country {
+            world.countries[c.index()].stability += 0.03;
+        }
+        (deed, true)
+    };
+
+    if !exposed {
+        return;
+    }
+    if foreign {
+        // Un asesino extranjero descubierto es motivo de guerra.
+        let (Some(victim_side), Some(enemy)) = (target_country, plotter_country) else {
+            return;
+        };
+        if let Some(r) = relation_index(world, victim_side, enemy) {
+            world.relations[r].opinion = -1.0;
+            world.relations[r].allied = false;
+        }
+        let ready = world.countries[enemy.index()].exists()
+            && world.countries[victim_side.index()].exists()
+            && !at_war(world, victim_side, enemy)
+            && !in_any_war(world, victim_side);
+        if ready && rng.gen_bool(0.6) {
+            declare_war(world, rng, victim_side, enemy, Some(deed));
+        }
+    } else if ruler_of(world, plotter).is_none() && rng.gen_bool(0.7) {
+        kill(world, plotter, DeathCause::Execution, Some(deed));
     }
 }
 
@@ -540,7 +937,8 @@ fn diplomacy(world: &mut World, rng: &mut Rng) {
 
         if !allied && !fighting && opinion > 0.35 && rng.gen_bool(0.08) {
             world.relations[r].allied = true;
-            event(world, EventKind::AllianceFormed { a, b }, pos);
+            let because = bond(world, a, b);
+            caused(world, EventKind::AllianceFormed { a, b }, pos, because);
         } else if allied && opinion < 0.1 {
             world.relations[r].allied = false;
             event(world, EventKind::AllianceBroken { a, b }, pos);
@@ -552,17 +950,95 @@ fn diplomacy(world: &mut World, rng: &mut Rng) {
                 (b, a, sb / sa)
             };
             if ratio > 0.9 && !in_any_war(world, attacker) && rng.gen_bool(0.06) {
-                declare_war(world, rng, attacker, defender);
+                let because = casus_belli(world, attacker, defender);
+                declare_war(world, rng, attacker, defender, because);
             }
         }
     }
 }
 
-fn declare_war(world: &mut World, rng: &mut Rng, attacker: CountryId, defender: CountryId) {
+/// Lo que acerca a dos países: una boda entre sus casas cuyos cónyuges viven,
+/// o una guerra contra un enemigo común.
+fn bond(world: &World, a: CountryId, b: CountryId) -> Option<EventId> {
+    let pair = |x: CountryId, y: CountryId| (x == a && y == b) || (x == b && y == a);
+    let alive = |p: PersonId| world.people[p.index()].died.is_none();
+    let wedding = world.events.iter().rev().find(|e| match e.kind {
+        EventKind::Marriage {
+            a: pa,
+            b: pb,
+            union: Some((x, y)),
+        } => pair(x, y) && alive(pa) && alive(pb),
+        _ => false,
+    });
+    if let Some(e) = wedding {
+        return Some(e.id);
+    }
+    let enemy = |c: CountryId, w: &War| {
+        (w.attacker == c)
+            .then_some(w.defender)
+            .or((w.defender == c).then_some(w.attacker))
+    };
+    let fronts = |c: CountryId| {
+        world
+            .wars
+            .iter()
+            .filter(|w| w.ended.is_none())
+            .filter_map(move |w| enemy(c, w).map(|e| (e, w.declared)))
+    };
+    fronts(a)
+        .find(|(e, _)| fronts(b).any(|(other, _)| other == *e))
+        .and_then(|(_, declared)| declared)
+}
+
+/// El agravio que lleva a `attacker` a la guerra contra `defender`: un
+/// asesinato o conjura descubierta, una derrota que vengar, una secesión o
+/// una alianza traicionada, de las últimas décadas.
+fn casus_belli(world: &World, attacker: CountryId, defender: CountryId) -> Option<EventId> {
+    let since = world.year - 60;
+    let pair = |x: Option<CountryId>, y: Option<CountryId>| {
+        (x == Some(attacker) && y == Some(defender)) || (x == Some(defender) && y == Some(attacker))
+    };
+    let country_of = |p: PersonId| world.people[p.index()].country;
+    world
+        .events
+        .iter()
+        .rev()
+        .take_while(|e| e.year >= since)
+        .find(|e| match e.kind {
+            EventKind::Assassinated {
+                victim,
+                plotter,
+                exposed: true,
+                ..
+            }
+            | EventKind::PlotFoiled {
+                target: victim,
+                plotter,
+                ..
+            } => pair(country_of(victim), country_of(plotter)),
+            EventKind::PeaceSigned { war } => {
+                let w = &world.wars[war.index()];
+                pair(Some(w.attacker), Some(w.defender)) && w.winner == Some(defender)
+            }
+            EventKind::Independence { from, country, .. } => pair(Some(from), Some(country)),
+            EventKind::AllianceBroken { a, b } => pair(Some(a), Some(b)),
+            _ => false,
+        })
+        .map(|e| e.id)
+}
+
+fn declare_war(
+    world: &mut World,
+    rng: &mut Rng,
+    attacker: CountryId,
+    defender: CountryId,
+    because: Option<EventId>,
+) {
     let id = WarId(world.wars.len() as u32);
+    let name = war_name(world, rng, attacker, defender, because);
     world.wars.push(War {
         id,
-        name: format!("Guerra de {}", names::word(rng, 2, 3)),
+        name,
         attacker,
         defender,
         started: world.year,
@@ -570,9 +1046,134 @@ fn declare_war(world: &mut World, rng: &mut Rng, attacker: CountryId, defender: 
         winner: None,
         conquests: Vec::new(),
         exhaustion: 0.0,
+        declared: None,
     });
     let pos = capital_pos(world, defender);
-    event(world, EventKind::WarDeclared { war: id }, Some(pos));
+    let declared = caused(
+        world,
+        EventKind::WarDeclared { war: id },
+        Some(pos),
+        because,
+    );
+    world.wars[id.index()].declared = Some(declared);
+}
+
+const ORDINALS: [&str; 8] = [
+    "Segunda", "Tercera", "Cuarta", "Quinta", "Sexta", "Séptima", "Octava", "Novena",
+];
+
+/// Nombre con que los cronistas recuerdan una guerra: por su causa, por el
+/// tiempo que hizo aquel año en el frente o por el paisaje donde se libró.
+/// Las guerras de revancha heredan el nombre de la anterior («Segunda…»).
+fn war_name(
+    world: &World,
+    rng: &mut Rng,
+    attacker: CountryId,
+    defender: CountryId,
+    because: Option<EventId>,
+) -> String {
+    let taken = |name: &str| world.wars.iter().any(|w| w.name == name);
+    // Prefiere un nombre de la lista que nadie haya usado.
+    let pick = |rng: &mut Rng, options: &[&str]| {
+        let mut options = options.to_vec();
+        options.shuffle(rng);
+        options
+            .iter()
+            .find(|o| !taken(&format!("Guerra {o}")))
+            .unwrap_or(&options[0])
+            .to_string()
+    };
+    if let Some(EventKind::PeaceSigned { war }) = because.map(|e| world.events[e.index()].kind) {
+        // Revancha: la misma guerra, un capítulo más.
+        let previous = &world.wars[war.index()].name;
+        let base = match previous.split_once("Guerra ") {
+            Some((_, rest)) => format!("Guerra {rest}"),
+            None => previous.clone(),
+        };
+        let pair = |w: &War| {
+            (w.attacker == attacker && w.defender == defender)
+                || (w.attacker == defender && w.defender == attacker)
+        };
+        let earlier = world
+            .wars
+            .iter()
+            .filter(|w| pair(w) && (w.name == base || w.name.ends_with(&format!(" {base}"))))
+            .count()
+            .max(1);
+        return format!("{} {base}", ORDINALS[(earlier - 1).min(ORDINALS.len() - 1)]);
+    }
+    let theme = match because.map(|e| world.events[e.index()].kind) {
+        Some(EventKind::Assassinated { .. }) => pick(
+            rng,
+            &["del Puñal", "de la Sangre Real", "del Veneno", "de la Daga"],
+        ),
+        Some(EventKind::PlotFoiled { .. }) => pick(
+            rng,
+            &["de la Conjura", "de los Traidores", "de la Daga Rota"],
+        ),
+        Some(EventKind::Independence { locality, .. }) => {
+            format!(
+                "de la Secesión de {}",
+                world.localities[locality.index()].name
+            )
+        }
+        Some(EventKind::AllianceBroken { .. }) => {
+            pick(rng, &["de la Alianza Rota", "del Juramento Roto"])
+        }
+        _ => {
+            let pos = capital_pos(world, defender);
+            let climate = crate::climate::year_climate(world, world.year);
+            let rain = climate.at(&world.map, pos);
+            let stormy = climate.stormy[world.map.index(pos)];
+            let near_river = world
+                .map
+                .neighbors8(pos)
+                .find_map(|n| world.map.tile(n).unwrap().river);
+            let biome = world.map.tile(pos).unwrap().biome;
+            if stormy {
+                pick(
+                    rng,
+                    &["de las Tormentas", "del Trueno", "de los Relámpagos"],
+                )
+            } else if rain > 1.25 {
+                pick(rng, &["de la Lluvia", "de las Lluvias", "del Barro"])
+            } else if rain < 0.75 {
+                pick(rng, &["de la Sequía", "del Polvo", "de la Sed"])
+            } else if let (Some(river), true) = (near_river, rng.gen_bool(0.4)) {
+                format!("del {}", world.rivers[river.index()].name)
+            } else {
+                let by_land: &[&str] = match biome {
+                    Biome::Forest | Biome::Jungle | Biome::Taiga => {
+                        &["de los Bosques", "de los Robles", "de la Espesura"]
+                    }
+                    Biome::Hills | Biome::Mountain => &["de las Colinas", "de los Pasos"],
+                    Biome::Desert | Biome::Savanna | Biome::Shrubland => {
+                        &["de las Arenas", "del Sol", "de las Cenizas"]
+                    }
+                    Biome::Tundra | Biome::Glacier => &["del Invierno", "de la Escarcha"],
+                    Biome::Swamp => &["de las Ciénagas", "de la Niebla"],
+                    _ => &[
+                        "de los Cuervos",
+                        "de los Estandartes",
+                        "de las Dos Coronas",
+                        "de las Cosechas",
+                        "de las Lanzas",
+                    ],
+                };
+                if rng.gen_bool(0.25) {
+                    format!("de {}", names::word(rng, 2, 3))
+                } else {
+                    pick(rng, by_land)
+                }
+            }
+        }
+    };
+    let name = format!("Guerra {theme}");
+    if taken(&name) {
+        format!("Guerra de {}", names::word(rng, 2, 3))
+    } else {
+        name
+    }
 }
 
 // ---------------------------------------------------------------- guerras
@@ -608,7 +1209,8 @@ fn wage_wars(world: &mut World, rng: &mut Rng) {
             (defender, attacker)
         };
         let pos = world.localities[target.index()].pos;
-        event(
+        let declared = world.wars[w].declared;
+        let battle = caused(
             world,
             EventKind::Battle {
                 war,
@@ -617,6 +1219,7 @@ fn wage_wars(world: &mut World, rng: &mut Rng) {
                 loser,
             },
             Some(pos),
+            declared,
         );
         let locality = &mut world.localities[target.index()];
         locality.population = (locality.population as f32 * rng.gen_range(0.85..0.97)) as u32;
@@ -631,14 +1234,14 @@ fn wage_wars(world: &mut World, rng: &mut Rng) {
                 .collect();
             if let Some(&general) = generals.choose(rng) {
                 if rng.gen_bool(risk) {
-                    kill(world, general, DeathCause::Battle);
+                    kill(world, general, DeathCause::Battle, Some(battle));
                 }
             }
         }
 
         if winner == attacker && rng.gen_bool(0.4) {
             world.wars[w].conquests.push(target);
-            event(
+            let conquest = caused(
                 world,
                 EventKind::LocalityConquered {
                     war,
@@ -647,8 +1250,9 @@ fn wage_wars(world: &mut World, rng: &mut Rng) {
                     to: attacker,
                 },
                 Some(pos),
+                Some(battle),
             );
-            transfer_locality(world, target, attacker);
+            transfer_locality(world, target, attacker, Some(conquest));
             if !world.countries[defender.index()].exists() {
                 end_war(world, war, Some(attacker));
                 continue;
@@ -679,12 +1283,18 @@ fn end_war(world: &mut World, war: WarId, winner: Option<CountryId>) {
         world.relations[r].opinion = -0.3;
     }
     let pos = capital_pos(world, b);
-    event(world, EventKind::PeaceSigned { war }, Some(pos));
+    let declared = world.wars[war.index()].declared;
+    caused(world, EventKind::PeaceSigned { war }, Some(pos), declared);
 }
 
 /// Cambia de dueño una localidad junto con las casillas que la rodean (las que
 /// tenían esa localidad como la más cercana de su antiguo país).
-fn transfer_locality(world: &mut World, locality: LocalityId, to: CountryId) {
+fn transfer_locality(
+    world: &mut World,
+    locality: LocalityId,
+    to: CountryId,
+    because: Option<EventId>,
+) {
     let Some(from) = world.localities[locality.index()].country else {
         world.localities[locality.index()].country = Some(to);
         return;
@@ -705,13 +1315,14 @@ fn transfer_locality(world: &mut World, locality: LocalityId, to: CountryId) {
                 world.people[ruler.index()].home = new_capital;
             }
             let pos = world.localities[new_capital.index()].pos;
-            event(
+            caused(
                 world,
                 EventKind::CapitalMoved {
                     country: from,
                     locality: new_capital,
                 },
                 Some(pos),
+                because,
             );
         }
     }
@@ -751,13 +1362,14 @@ fn transfer_locality(world: &mut World, locality: LocalityId, to: CountryId) {
             person.country = Some(to);
         }
         let pos = world.localities[locality.index()].pos;
-        event(
+        caused(
             world,
             EventKind::CountryFell {
                 country: from,
                 conqueror: Some(to),
             },
             Some(pos),
+            because,
         );
         // Sus localidades en ruinas pasan también al vencedor.
         for l in world.localities.iter_mut() {
@@ -820,7 +1432,8 @@ fn independence(world: &mut World, rng: &mut Rng, locality: LocalityId, from: Co
         });
     }
     let pos = world.localities[locality.index()].pos;
-    event(
+    let because = recent_blow(world, from, 15);
+    let revolt = caused(
         world,
         EventKind::Independence {
             locality,
@@ -828,9 +1441,15 @@ fn independence(world: &mut World, rng: &mut Rng, locality: LocalityId, from: Co
             country: id,
         },
         Some(pos),
+        because,
     );
-    event(world, EventKind::CountryFounded { country: id }, Some(pos));
-    transfer_locality(world, locality, id);
+    caused(
+        world,
+        EventKind::CountryFounded { country: id },
+        Some(pos),
+        Some(revolt),
+    );
+    transfer_locality(world, locality, id, Some(revolt));
 
     // El líder de la revuelta: un general o noble local, o alguien nuevo.
     let leader = world
@@ -847,7 +1466,12 @@ fn independence(world: &mut World, rng: &mut Rng, locality: LocalityId, from: Co
         None => {
             let born = year - rng.gen_range(25..50);
             let person = add_person(world, rng, Role::General, locality, Some(id), born, None);
-            event(world, EventKind::PersonRose { person }, Some(pos));
+            caused(
+                world,
+                EventKind::PersonRose { person },
+                Some(pos),
+                Some(revolt),
+            );
             person
         }
     };
@@ -856,13 +1480,14 @@ fn independence(world: &mut World, rng: &mut Rng, locality: LocalityId, from: Co
     world.countries[id.index()].ruler = Some(leader);
     world.countries[id.index()].stability = 0.6;
     world.countries[from.index()].stability += 0.15;
-    event(
+    caused(
         world,
         EventKind::RulerCrowned {
             person: leader,
             country: id,
         },
         Some(pos),
+        Some(revolt),
     );
 }
 
@@ -881,7 +1506,7 @@ fn plagues(world: &mut World, rng: &mut Rng) {
         deaths += lost;
     }
     let pos = capital_pos(world, c);
-    event(world, EventKind::Plague { country: c, deaths }, Some(pos));
+    let plague = event(world, EventKind::Plague { country: c, deaths }, Some(pos));
     let victims: Vec<PersonId> = world
         .people
         .iter()
@@ -890,7 +1515,7 @@ fn plagues(world: &mut World, rng: &mut Rng) {
         .collect();
     for p in victims {
         if rng.gen_bool(0.1) {
-            kill(world, p, DeathCause::Plague);
+            kill(world, p, DeathCause::Plague, Some(plague));
         }
     }
     world.countries[c.index()].stability -= 0.15;
