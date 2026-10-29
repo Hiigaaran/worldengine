@@ -1,6 +1,7 @@
 //! Aplicación visual de WorldEngine.
 
 mod app;
+mod art;
 mod details;
 mod legends;
 mod map_view;
@@ -19,6 +20,9 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "WorldEngine",
         options,
-        Box::new(|_cc| Ok(Box::new(app::App::default()))),
+        Box::new(|cc| {
+            egui_extras::install_image_loaders(&cc.egui_ctx);
+            Ok(Box::new(app::App::default()))
+        }),
     )
 }

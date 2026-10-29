@@ -159,6 +159,39 @@ impl World {
         })
     }
 
+    /// Dónde ocurrió un evento. Si no tiene lugar propio (una alianza, una
+    /// boda), se toma el de lo que menciona: la localidad, el hogar del
+    /// personaje o la capital del país.
+    pub fn event_place(&self, event: &Event) -> Option<Pos> {
+        event.location.or_else(|| {
+            event
+                .kind
+                .subjects()
+                .into_iter()
+                .map(|s| match s {
+                    Subject::Locality(l) => self.locality(l).pos,
+                    Subject::Person(p) => self.locality(self.person(p).home).pos,
+                    Subject::Country(c) => self.locality(self.country(c).capital).pos,
+                    Subject::War(w) => {
+                        self.locality(self.country(self.war(w).defender).capital)
+                            .pos
+                    }
+                })
+                .next()
+        })
+    }
+
+    /// Los lugares de un grupo de eventos, sin repetir y en orden.
+    pub fn places_of<'a>(&self, events: impl IntoIterator<Item = &'a Event>) -> Vec<Pos> {
+        let mut places = Vec::new();
+        for place in events.into_iter().filter_map(|e| self.event_place(e)) {
+            if !places.contains(&place) {
+                places.push(place);
+            }
+        }
+        places
+    }
+
     /// Los eventos menores (nacimientos, aldeas que crecen, muertes de personajes
     /// secundarios) se pueden ocultar en la línea de tiempo para leer solo la
     /// gran historia.
@@ -545,4 +578,19 @@ impl World {
     pub fn from_json(json: &str) -> serde_json::Result<World> {
         serde_json::from_str(json)
     }
+}
+
+/// El lugar que mejor resume un grupo de lugares: el más cercano al promedio
+/// de todos. Es siempre uno de ellos, así que cae en tierra y no en mitad del
+/// mar entre dos costas.
+pub fn central(places: &[Pos]) -> Option<Pos> {
+    let n = places.len() as f32;
+    let (sx, sy) = places
+        .iter()
+        .fold((0.0, 0.0), |(x, y), p| (x + p.x as f32, y + p.y as f32));
+    let (mx, my) = (sx / n, sy / n);
+    places.iter().copied().min_by(|a, b| {
+        let d = |p: &Pos| (p.x as f32 - mx).powi(2) + (p.y as f32 - my).powi(2);
+        d(a).total_cmp(&d(b))
+    })
 }

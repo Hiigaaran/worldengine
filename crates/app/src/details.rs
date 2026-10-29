@@ -2,8 +2,9 @@
 //! general (región, país) a lo particular (localidad, personajes, eventos).
 
 use eframe::egui::{self, RichText};
-use worldengine_core::{Biome, Country, Person, Pos, Subject, Tile, World};
+use worldengine_core::{art, Biome, Country, Person, Pos, Subject, Tile, World};
 
+use crate::art::image;
 use crate::nav::{Nav, Page};
 
 /// Muestra el panel y devuelve la navegación que pidió el usuario, si alguna.
@@ -296,7 +297,10 @@ fn person_details(ui: &mut egui::Ui, world: &World, person: &Person, nav: &mut O
         ),
     };
     ui.collapsing(title, |ui| {
-        open(ui, Page::Person(person.id), nav);
+        ui.horizontal(|ui| {
+            ui.add(image(art::portrait(world, person.id), 96.0));
+            open(ui, Page::Person(person.id), nav);
+        });
         if let Some(parent) = person.parent.map(|p| world.person(p)) {
             ui.label(format!("Hijo de {}", parent.name));
         }

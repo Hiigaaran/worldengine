@@ -1,10 +1,12 @@
 //! Línea de tiempo: un control para viajar a cualquier año (el mapa y los
 //! detalles muestran el mundo de ese momento) y la lista de eventos hasta ese
-//! año, con filtros.
+//! año, con filtros. Cada evento lleva el icono de su tipo; al elegirlo se
+//! viaja a su año, se centra el mapa en su lugar y se abre su ficha.
 
 use eframe::egui::{self, RichText};
-use worldengine_core::{Pos, World, Year};
+use worldengine_core::{art, Pos, World, Year};
 
+use crate::art::image;
 use crate::nav::Nav;
 
 pub struct Timeline {
@@ -112,9 +114,15 @@ impl Timeline {
                     } else {
                         text
                     };
-                    if ui.selectable_label(here, text).clicked() {
-                        nav = Some(Nav::Travel(event.year, event.location));
-                    }
+                    ui.horizontal(|ui| {
+                        ui.add(image(art::event(world, event), row_height - 2.0));
+                        if ui.selectable_label(here, text).clicked() {
+                            nav = Some(Nav::Event {
+                                id: event.id,
+                                travel: true,
+                            });
+                        }
+                    });
                 }
             });
         nav

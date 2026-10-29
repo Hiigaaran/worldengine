@@ -2,12 +2,20 @@
 //! Dwarf Fortress. Lista países, localidades, personajes y guerras de toda la
 //! historia, y abre la ficha de cada uno con sus vínculos y sus hechos.
 //! Las historias agrupan los hechos que se provocaron unos a otros en relatos
-//! con título y contexto.
+//! con título y contexto. Personajes, eventos e historias llevan una imagen
+//! vectorial acorde a la edad del mundo, y abrir una historia o un evento
+//! centra el mapa en sus lugares.
 
 use eframe::egui::{self, RichText};
-use worldengine_core::{Age, Event, Story, StoryId, StoryKind, Subject, World};
+use worldengine_core::{art, Age, Event, EventId, Story, StoryId, StoryKind, Subject, World};
 
+use crate::art::{image, save_button};
 use crate::nav::{Nav, Page};
+
+/// Lado de las imágenes grandes de las fichas.
+const PICTURE: f32 = 128.0;
+/// Lado de los iconos en las listas de eventos.
+const ICON: f32 = 18.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Category {
@@ -110,15 +118,31 @@ impl Legends {
                     Page::Person(id) => person_page(ui, world, stories, id, &mut nav),
                     Page::War(id) => war_page(ui, world, stories, id, &mut nav),
                     Page::Story(id) => story_page(ui, world, stories, id, &mut nav),
+                    Page::Event(id) => event_page(ui, world, stories, id, &mut nav),
                 });
             }
             None => self.list(ui, world, &mut nav),
         }
-        if let Some(Nav::Open(page)) = nav {
-            self.open(page);
-            return None;
+        match nav {
+            Some(Nav::Open(page)) => {
+                self.open(page);
+                self.focus(world, page)
+            }
+            other => other,
         }
-        nav
+    }
+
+    /// Al abrir una historia el mapa encuadra sus lugares; al abrir un evento,
+    /// se centra en el suyo.
+    fn focus(&self, world: &World, page: Page) -> Option<Nav> {
+        match page {
+            Page::Story(id) => {
+                let story = self.stories.get(id.index())?;
+                Some(Nav::Frame(story_places(world, story)))
+            }
+            Page::Event(id) => Some(Nav::Event { id, travel: false }),
+            _ => None,
+        }
     }
 
     fn list(&mut self, ui: &mut egui::Ui, world: &World, nav: &mut Option<Nav>) {
@@ -247,7 +271,8 @@ fn page_link(
     }
 }
 
-/// Lista de eventos: el año viaja en el tiempo hasta ese momento y lugar.
+/// Lista de eventos con su icono: el año viaja en el tiempo hasta ese momento
+/// y lugar; el texto abre la ficha del evento.
 fn events<'a>(
     ui: &mut egui::Ui,
     world: &World,
@@ -256,15 +281,140 @@ fn events<'a>(
 ) {
     for event in events {
         ui.horizontal_wrapped(|ui| {
+            ui.add(image(art::event(world, event), ICON));
             let year = ui
                 .link(format!("Año {}", event.year))
                 .on_hover_text("Ver el mapa en ese año");
             if year.clicked() {
-                *nav = Some(Nav::Travel(event.year, event.location));
+                *nav = Some(Nav::Travel(event.year, world.event_place(event)));
             }
-            ui.label(world.describe(event));
+            let text = ui
+                .link(world.describe(event))
+                .on_hover_text("Abrir el evento y centrar el mapa");
+            if text.clicked() {
+                *nav = Some(Nav::Open(Page::Event(event.id)));
+            }
         });
     }
+}
+
+/// Los lugares donde ocurrieron los hechos de una historia.
+fn story_places(world: &World, story: &Story) -> Vec<worldengine_core::Pos> {
+    world.places_of(story.events.iter().map(|&e| &world.events[e.index()]))
+}
+
+/// Imagen grande a la izquierda y, a su derecha, el título y lo que añada `rest`.
+fn picture_header(ui: &mut egui::Ui, svg: String, title: &str, rest: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal(|ui| {
+        ui.add(image(svg, PICTURE));
+        ui.vertical(|ui| {
+            ui.heading(title);
+            rest(ui);
+        });
+    });
+}
+
+/// Enlaces a las fichas de lo que menciona un evento o una historia.
+fn subject_links(ui: &mut egui::Ui, world: &World, subjects: &[Subject], nav: &mut Option<Nav>) {
+    for subject in subjects {
+        match *subject {
+            Subject::Country(c) => page_link(
+                ui,
+                format!("País: {}", world.country(c).name),
+                Page::Country(c),
+                nav,
+            ),
+            Subject::Person(p) => {
+                let person = world.person(p);
+                page_link(
+                    ui,
+                    format!(
+                        "{}, {}",
+                        person.name,
+                        person.role.name(world.config.age).to_lowercase()
+                    ),
+                    Page::Person(p),
+                    nav,
+                );
+            }
+            Subject::War(w) => page_link(ui, &world.war(w).name, Page::War(w), nav),
+            Subject::Locality(l) => page_link(
+                ui,
+                format!("Lugar: {}", world.locality(l).name),
+                Page::Locality(l),
+                nav,
+            ),
+        }
+    }
+}
+
+fn event_page(
+    ui: &mut egui::Ui,
+    world: &World,
+    stories: &[Story],
+    id: EventId,
+    nav: &mut Option<Nav>,
+) {
+    let Some(event) = world.events.get(id.index()) else {
+        return;
+    };
+    let svg = art::event(world, event);
+    let place = world.event_place(event);
+    picture_header(ui, svg.clone(), &format!("Año {}", event.year), |ui| {
+        if let Some(locality) = place.and_then(|p| world.locality_at(p)) {
+            ui.horizontal_wrapped(|ui| {
+                ui.label("En");
+                page_link(ui, &locality.name, Page::Locality(locality.id), nav);
+            });
+        }
+        if let Some(pos) = place {
+            if ui.small_button("Ver en el mapa").clicked() {
+                *nav = Some(Nav::GoTo(pos));
+            }
+        }
+        if ui
+            .small_button("Viajar a ese año")
+            .on_hover_text("Ver el mapa tal como era cuando ocurrió")
+            .clicked()
+        {
+            *nav = Some(Nav::Travel(event.year, place));
+        }
+        save_button(ui, &format!("evento-{}", id.index()), svg, nav);
+    });
+    ui.add_space(4.0);
+    ui.label(RichText::new(world.describe(event)).strong());
+    ui.add_space(4.0);
+
+    if let Some(cause) = event.cause.and_then(|c| world.events.get(c.index())) {
+        ui.label(RichText::new("Provocado por").strong());
+        events(ui, world, std::iter::once(cause), nav);
+    }
+    let consequences: Vec<&Event> = world
+        .events
+        .iter()
+        .skip(id.index() + 1)
+        .filter(|e| e.cause == Some(id))
+        .collect();
+    if !consequences.is_empty() {
+        ui.label(RichText::new("Consecuencias").strong());
+        events(ui, world, consequences.into_iter(), nav);
+    }
+    let within: Vec<StoryId> = stories
+        .iter()
+        .filter(|s| s.events.contains(&id))
+        .map(|s| s.id)
+        .collect();
+    story_links(
+        ui,
+        world.config.age,
+        stories,
+        "Forma parte de",
+        &within,
+        nav,
+    );
+    ui.separator();
+    ui.strong("Protagonistas");
+    subject_links(ui, world, &event.kind.subjects(), nav);
 }
 
 fn years(story: &Story) -> String {
@@ -343,12 +493,22 @@ fn story_page(
     let Some(story) = stories.get(id.index()) else {
         return;
     };
-    ui.heading(&story.title);
-    ui.label(format!(
-        "{} · {}",
-        story.kind.name(world.config.age),
-        years(story)
-    ));
+    let svg = art::story(world, story);
+    picture_header(ui, svg.clone(), &story.title, |ui| {
+        ui.label(format!(
+            "{} · {}",
+            story.kind.name(world.config.age),
+            years(story)
+        ));
+        if ui
+            .small_button("Ver en el mapa")
+            .on_hover_text("Centrar el mapa en el lugar más cercano a todos sus hechos")
+            .clicked()
+        {
+            *nav = Some(Nav::Frame(story_places(world, story)));
+        }
+        save_button(ui, &story.title, svg, nav);
+    });
     ui.add_space(4.0);
     ui.label(&story.summary);
     ui.add_space(4.0);
@@ -382,31 +542,13 @@ fn story_page(
     );
 
     ui.collapsing("Protagonistas", |ui| {
-        for subject in &story.subjects {
-            match *subject {
-                Subject::Country(c) => page_link(
-                    ui,
-                    format!("País: {}", world.country(c).name),
-                    Page::Country(c),
-                    nav,
-                ),
-                Subject::Person(p) => {
-                    let person = world.person(p);
-                    page_link(
-                        ui,
-                        format!(
-                            "{}, {}",
-                            person.name,
-                            person.role.name(world.config.age).to_lowercase()
-                        ),
-                        Page::Person(p),
-                        nav,
-                    );
-                }
-                Subject::War(w) => page_link(ui, &world.war(w).name, Page::War(w), nav),
-                Subject::Locality(_) => {}
-            }
-        }
+        let actors: Vec<Subject> = story
+            .subjects
+            .iter()
+            .copied()
+            .filter(|s| !matches!(s, Subject::Locality(_)))
+            .collect();
+        subject_links(ui, world, &actors, nav);
     });
     let places: Vec<_> = story
         .subjects
@@ -560,7 +702,6 @@ fn person_page(
     nav: &mut Option<Nav>,
 ) {
     let person = world.person(id);
-    ui.heading(&person.name);
     let life = match (person.died, person.cause_of_death) {
         (Some(d), Some(cause)) => format!(
             "año {} – {d}, murió {}",
@@ -573,7 +714,14 @@ fn person_page(
             world.year - person.born
         ),
     };
-    ui.label(format!("{} · {life}", person.role.name(world.config.age)));
+    let svg = art::portrait(world, id);
+    picture_header(ui, svg.clone(), &person.name, |ui| {
+        ui.label(format!("{} · {life}", person.role.name(world.config.age)));
+        if ui.small_button("Ver en el mapa").clicked() {
+            *nav = Some(Nav::GoTo(world.locality(person.home).pos));
+        }
+        save_button(ui, &person.name, svg, nav);
+    });
     ui.horizontal(|ui| {
         ui.label("Hogar:");
         page_link(

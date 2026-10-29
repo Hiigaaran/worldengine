@@ -10,6 +10,7 @@
 //! ```
 
 pub mod age;
+pub mod art;
 pub mod climate;
 pub mod generate;
 pub mod geography;
@@ -29,5 +30,5 @@ pub use generate::{found, generate};
 pub use ids::*;
 pub use legends::Chronicle;
 pub use model::*;
-pub use query::Subject;
+pub use query::{central, Subject};
 pub use stories::{Story, StoryKind};

@@ -1,7 +1,7 @@
 //! Mapa del mundo con zoom (rueda), desplazamiento (arrastrar) y selección (clic).
 
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, TextureHandle, Vec2};
-use worldengine_core::{LocalityKind, Pos, World, YearClimate};
+use worldengine_core::{central, LocalityKind, Pos, World, YearClimate};
 
 use crate::overlays;
 use crate::render::render;
@@ -54,6 +54,11 @@ pub struct MapView {
     pub show_weather: bool,
     /// Explosiones donde hubo batallas en el año.
     pub show_battles: bool,
+    /// Lugares de la historia abierta en Leyendas, marcados en el mapa.
+    pub highlight: Vec<Pos>,
+    /// Cuántas casillas a cada lado del centro deben caber en la vista; se
+    /// aplica en el siguiente cuadro, cuando se conoce el tamaño del mapa.
+    fit: Option<Vec2>,
 }
 
 impl Default for MapView {
@@ -66,6 +71,8 @@ impl Default for MapView {
             texture_key: None,
             show_weather: true,
             show_battles: true,
+            highlight: Vec::new(),
+            fit: None,
         }
     }
 }
@@ -75,6 +82,8 @@ impl MapView {
         self.texture = None;
         self.center = None;
         self.zoom = 1.0;
+        self.highlight.clear();
+        self.fit = None;
     }
 
     pub fn set_mode(&mut self, mode: MapMode) {
@@ -87,6 +96,21 @@ impl MapView {
     pub fn center_on(&mut self, pos: Pos) {
         self.center = Some(Vec2::new(pos.x as f32 + 0.5, pos.y as f32 + 0.5));
         self.zoom = self.zoom.max(4.0);
+    }
+
+    /// Centra el mapa en el lugar más cercano al promedio de `places` y ajusta
+    /// el zoom para que quepan todos. Devuelve ese lugar central.
+    pub fn frame(&mut self, places: &[Pos]) -> Option<Pos> {
+        let focus = central(places)?;
+        self.center_on(focus);
+        let reach = places.iter().fold(Vec2::ZERO, |r, p| {
+            let dx = (p.x as f32 - focus.x as f32).abs();
+            let dy = (p.y as f32 - focus.y as f32).abs();
+            Vec2::new(r.x.max(dx), r.y.max(dy))
+        });
+        // Un margen de casillas para que los lugares no queden en el borde.
+        self.fit = Some(reach + Vec2::splat(5.0));
+        Some(focus)
     }
 
     /// Dibuja el mapa y devuelve la casilla clicada, si la hay. `markers` son
@@ -105,6 +129,11 @@ impl MapView {
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
         let rect = response.rect;
         let fit = (rect.width() / w).min(rect.height() / h);
+        if let Some(reach) = self.fit.take() {
+            let zoom_x = rect.width() / (2.0 * reach.x * fit);
+            let zoom_y = rect.height() / (2.0 * reach.y * fit);
+            self.zoom = zoom_x.min(zoom_y).clamp(1.0, 8.0);
+        }
         let center = self.center.get_or_insert(Vec2::new(w / 2.0, h / 2.0));
 
         let mut px = fit * self.zoom;
@@ -284,6 +313,24 @@ impl MapView {
         for &m in markers {
             let p = to_screen(m.x as f32 + 0.5, m.y as f32 + 0.5);
             painter.circle_stroke(p, (px * 1.2).max(9.0), Stroke::new(2.5_f32, pulse));
+        }
+
+        // Los lugares de la historia abierta: rombos dorados.
+        let gold = Color32::from_rgb(255, 200, 60);
+        for &h in &self.highlight {
+            let p = to_screen(h.x as f32 + 0.5, h.y as f32 + 0.5);
+            let r = (px * 0.8).clamp(5.0, 12.0);
+            let diamond = vec![
+                p + Vec2::new(0.0, -r),
+                p + Vec2::new(r, 0.0),
+                p + Vec2::new(0.0, r),
+                p + Vec2::new(-r, 0.0),
+            ];
+            painter.add(egui::Shape::convex_polygon(
+                diamond,
+                gold.gamma_multiply(0.85),
+                Stroke::new(1.5_f32, Color32::BLACK),
+            ));
         }
 
         let cursor = response.hover_pos();

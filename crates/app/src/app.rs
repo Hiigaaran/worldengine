@@ -7,7 +7,7 @@ use worldengine_core::{
 use crate::details;
 use crate::legends::Legends;
 use crate::map_view::{MapMode, MapView};
-use crate::nav::Nav;
+use crate::nav::{Nav, Page};
 use crate::timeline::Timeline;
 
 /// Segundos entre años al reproducir la historia.
@@ -110,7 +110,10 @@ impl App {
                 self.selected = Some(pos);
                 self.map.center_on(pos);
             }
-            Nav::Overview => self.selected = None,
+            Nav::Overview => {
+                self.selected = None;
+                self.map.highlight.clear();
+            }
             Nav::Travel(year, pos) => {
                 self.travel(year);
                 if let Some(pos) = pos {
@@ -122,6 +125,32 @@ impl App {
             Nav::Open(page) => {
                 self.legends.open(page);
                 self.show_legends = true;
+            }
+            Nav::Event { id, travel } => {
+                let Some(event) = self.world.events.get(id.index()) else {
+                    return;
+                };
+                let (year, place) = (event.year, self.world.event_place(event));
+                if travel {
+                    self.travel(year);
+                }
+                if let Some(pos) = place {
+                    self.selected = Some(pos);
+                    self.map.center_on(pos);
+                }
+                self.map.highlight.clear();
+                self.legends.open(Page::Event(id));
+                self.show_legends = true;
+            }
+            Nav::Frame(places) => {
+                if let Some(focus) = self.map.frame(&places) {
+                    self.selected = Some(focus);
+                }
+                self.map.highlight = places;
+            }
+            Nav::SaveImage(name, svg) => {
+                let path = format!("{}-{name}", self.world.name.to_lowercase());
+                self.save(path, Ok(svg));
             }
         }
     }
