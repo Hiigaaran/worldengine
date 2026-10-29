@@ -37,4 +37,6 @@ define_id!(
     EventId,
     /// Guerra entre dos países.
     WarId,
+    /// Historia: un grupo de eventos enlazados por causa y consecuencia.
+    StoryId,
 );

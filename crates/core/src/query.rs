@@ -78,6 +78,21 @@ impl EventKind {
             } => {
                 vec![S::Locality(locality), S::Country(from), S::Country(country)]
             }
+            EventKind::Marriage { a, b, union } => {
+                let mut v = vec![S::Person(a), S::Person(b)];
+                if let Some((x, y)) = union {
+                    v.extend([S::Country(x), S::Country(y)]);
+                }
+                v
+            }
+            EventKind::Assassinated {
+                victim, plotter, ..
+            }
+            | EventKind::PlotFoiled {
+                target: victim,
+                plotter,
+                ..
+            } => vec![S::Person(victim), S::Person(plotter)],
         }
     }
 }
@@ -150,9 +165,17 @@ impl World {
                 kind: LocalityKind::Town,
                 ..
             } => false,
+            EventKind::Marriage { a, b, union } => {
+                union.is_some()
+                    || [a, b].iter().any(|&p| {
+                        self.person(p).role == Role::Ruler
+                            || self.countries.iter().any(|c| c.ruler == Some(p))
+                    })
+            }
             EventKind::PersonDied { person, cause } => {
                 cause == DeathCause::Battle
                     || cause == DeathCause::Assassination
+                    || cause == DeathCause::Execution
                     || self.person(person).role == Role::Ruler
                     || self.countries.iter().any(|c| c.ruler == Some(person))
             }
@@ -207,6 +230,12 @@ impl World {
             .count()
     }
 
+    /// Las historias que se tejen con los eventos del mundo (ver
+    /// [`crate::stories`]).
+    pub fn stories(&self) -> Vec<crate::Story> {
+        crate::stories::weave(self)
+    }
+
     /// Descripción en una línea de un evento, para la línea de tiempo.
     pub fn describe(&self, event: &Event) -> String {
         let country = |c: CountryId| self.country(c).name.as_str();
@@ -229,6 +258,19 @@ impl World {
             }
             EventKind::PersonBorn { person: p } => {
                 let who = self.person(p);
+                let couple = event.cause.and_then(|c| match self.events[c.index()].kind {
+                    EventKind::Marriage { a, b, .. } => Some((a, b)),
+                    _ => None,
+                });
+                if let Some((a, b)) = couple {
+                    return format!(
+                        "Nace {}, hijo de {} y {}, en {}",
+                        who.name,
+                        person(a),
+                        person(b),
+                        locality(who.home)
+                    );
+                }
                 match who.parent {
                     Some(parent) => format!(
                         "Nace {}, hijo de {}, en {}",
@@ -355,6 +397,53 @@ impl World {
             }
             EventKind::Plague { country: c, deaths } => {
                 format!("La peste asola {}: mueren {deaths} personas", country(c))
+            }
+            EventKind::Marriage { a, b, union } => {
+                let (pa, pb) = (self.person(a), self.person(b));
+                match union {
+                    Some((x, y)) => format!(
+                        "Boda de {} ({}) y {} ({}), que une a {} y {}",
+                        pa.name,
+                        pa.role.name().to_lowercase(),
+                        pb.name,
+                        pb.role.name().to_lowercase(),
+                        country(x),
+                        country(y)
+                    ),
+                    None => format!("{} y {} se casan", pa.name, pb.name),
+                }
+            }
+            EventKind::Assassinated {
+                victim,
+                plotter,
+                motive,
+                exposed,
+            } => {
+                let v = self.person(victim);
+                let mut text = format!(
+                    "{} ({}) es asesinado en {}",
+                    v.name,
+                    v.role.name().to_lowercase(),
+                    locality(v.home)
+                );
+                if exposed {
+                    text += &format!("; detrás estaba {}, por {}", person(plotter), motive.name());
+                } else {
+                    text += "; nadie sabe quién dio la orden";
+                }
+                text
+            }
+            EventKind::PlotFoiled {
+                target,
+                plotter,
+                motive,
+            } => {
+                format!(
+                    "Se descubre la conjura de {} para asesinar a {} (por {})",
+                    person(plotter),
+                    person(target),
+                    motive.name()
+                )
             }
         }
     }

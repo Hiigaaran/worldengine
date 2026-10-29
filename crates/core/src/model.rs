@@ -325,6 +325,43 @@ pub struct Person {
     /// Progenitor notable, para seguir linajes y dinastías.
     pub parent: Option<PersonId>,
     pub cause_of_death: Option<DeathCause>,
+    /// Cónyuge, si se casó (puede haber enviudado).
+    #[serde(default)]
+    pub spouse: Option<PersonId>,
+    /// Alguien a quien este personaje ha jurado vengar.
+    #[serde(default)]
+    pub grudge: Option<Grudge>,
+}
+
+/// Una deuda de sangre: `against` mató a alguien cercano en el evento `since`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Grudge {
+    pub against: PersonId,
+    pub since: EventId,
+}
+
+/// Por qué alguien conspira para matar a otro.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Motive {
+    /// Quiere el trono para sí.
+    Ambition,
+    /// Un gobernante enemigo quiere descabezar al país con el que está en guerra.
+    War,
+    /// Enemistad entre países sin guerra abierta.
+    Rivalry,
+    /// Venganza por un familiar asesinado.
+    Revenge,
+}
+
+impl Motive {
+    pub fn name(self) -> &'static str {
+        match self {
+            Motive::Ambition => "ambición",
+            Motive::War => "guerra",
+            Motive::Rivalry => "rivalidad",
+            Motive::Revenge => "venganza",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -334,6 +371,7 @@ pub enum DeathCause {
     Battle,
     Assassination,
     Plague,
+    Execution,
 }
 
 impl DeathCause {
@@ -344,6 +382,7 @@ impl DeathCause {
             DeathCause::Battle => "en batalla",
             DeathCause::Assassination => "asesinado",
             DeathCause::Plague => "por la peste",
+            DeathCause::Execution => "ejecutado",
         }
     }
 }
@@ -372,6 +411,9 @@ pub struct War {
     pub conquests: Vec<LocalityId>,
     /// Cansancio acumulado; al superar 1 se firma la paz.
     pub exhaustion: f32,
+    /// Evento de la declaración de guerra.
+    #[serde(default)]
+    pub declared: Option<EventId>,
 }
 
 impl Person {
@@ -458,6 +500,26 @@ pub enum EventKind {
         country: CountryId,
         deaths: u32,
     },
+    /// Boda entre dos personajes. `union` son los dos países que une, si el
+    /// matrimonio es entre casas de países distintos.
+    Marriage {
+        a: PersonId,
+        b: PersonId,
+        union: Option<(CountryId, CountryId)>,
+    },
+    /// Un asesinato consumado. `exposed` dice si se supo quién lo ordenó.
+    Assassinated {
+        victim: PersonId,
+        plotter: PersonId,
+        motive: Motive,
+        exposed: bool,
+    },
+    /// Una conjura para asesinar a alguien que fue descubierta a tiempo.
+    PlotFoiled {
+        target: PersonId,
+        plotter: PersonId,
+        motive: Motive,
+    },
 }
 
 /// Un hecho histórico. Los eventos son la columna vertebral de la línea de tiempo
@@ -468,6 +530,10 @@ pub struct Event {
     pub year: Year,
     pub kind: EventKind,
     pub location: Option<Pos>,
+    /// El hecho que lo provocó directamente, si se conoce. Con estos vínculos
+    /// se tejen las historias (ver [`crate::stories`]).
+    #[serde(default)]
+    pub cause: Option<EventId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

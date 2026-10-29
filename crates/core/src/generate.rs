@@ -117,14 +117,21 @@ pub(crate) fn distance2(a: Pos, b: Pos) -> u32 {
     a.x.abs_diff(b.x).pow(2) + a.y.abs_diff(b.y).pow(2)
 }
 
-pub(crate) fn push_event(world: &mut World, year: Year, kind: EventKind, location: Option<Pos>) {
+pub(crate) fn push_event(
+    world: &mut World,
+    year: Year,
+    kind: EventKind,
+    location: Option<Pos>,
+) -> EventId {
     let id = EventId(world.events.len() as u32);
     world.events.push(Event {
         id,
         year,
         kind,
         location,
+        cause: None,
     });
+    id
 }
 
 pub(crate) fn add_locality(
@@ -420,6 +427,8 @@ pub(crate) fn add_person(
         country,
         parent,
         cause_of_death: None,
+        spouse: None,
+        grudge: None,
     });
     id
 }

@@ -245,3 +245,106 @@ fn chronicle_text_covers_history() {
         assert!(text.contains(&war.name));
     }
 }
+
+#[test]
+fn causes_point_backwards() {
+    for seed in 0..5 {
+        let w = world(seed);
+        for e in &w.events {
+            if let Some(c) = e.cause {
+                assert!(c < e.id, "{:?} causado por un evento posterior", e.kind);
+                assert!(w.events[c.index()].year <= e.year);
+            }
+        }
+        for war in &w.wars {
+            let declared = war.declared.expect("toda guerra tiene declaración");
+            assert!(matches!(
+                w.events[declared.index()].kind,
+                EventKind::WarDeclared { war: id } if id == war.id
+            ));
+        }
+    }
+}
+
+#[test]
+fn intrigues_happen() {
+    let worlds: Vec<World> = (0..8).map(world).collect();
+    let count = |f: &dyn Fn(&EventKind) -> bool| {
+        worlds
+            .iter()
+            .flat_map(|w| &w.events)
+            .filter(|e| f(&e.kind))
+            .count()
+    };
+    assert!(
+        count(&|k| matches!(k, EventKind::Marriage { .. })) > 0,
+        "sin bodas"
+    );
+    assert!(
+        count(&|k| matches!(
+            k,
+            EventKind::Assassinated { .. } | EventKind::PlotFoiled { .. }
+        )) > 0,
+        "sin conjuras"
+    );
+    for w in &worlds {
+        for p in &w.people {
+            if let Some(s) = p.spouse {
+                assert!(w.person(s).spouse.is_some());
+                assert_ne!(s, p.id, "{} casado consigo mismo", p.name);
+            }
+        }
+    }
+}
+
+#[test]
+fn stories_are_woven() {
+    for seed in 0..5 {
+        let w = world(seed);
+        let stories = w.stories();
+        assert!(!stories.is_empty(), "seed {seed} sin historias");
+        // Cada guerra tiene su historia.
+        for war in &w.wars {
+            assert!(
+                stories
+                    .iter()
+                    .any(|s| s.kind == StoryKind::War && s.title == war.name),
+                "{} sin historia",
+                war.name
+            );
+        }
+        for (i, s) in stories.iter().enumerate() {
+            assert_eq!(s.id.index(), i);
+            assert!(!s.title.is_empty() && !s.summary.is_empty());
+            assert!(s.start <= s.end, "{}", s.title);
+            assert!(!s.events.is_empty(), "{} sin hechos", s.title);
+            assert!(s.events.windows(2).all(|p| p[0] < p[1]));
+            for &c in &s.consequences {
+                assert!(stories[c.index()].causes.contains(&s.id));
+            }
+            for &c in &s.chapters {
+                assert_eq!(stories[c.index()].part_of, Some(s.id));
+            }
+        }
+        if w.wars.len() >= 2 {
+            assert!(stories.iter().any(|s| s.kind != StoryKind::War));
+        }
+    }
+}
+
+#[test]
+fn chronicle_text_tells_stories() {
+    let w = world(4);
+    let text = w.chronicle_markdown();
+    assert!(text.contains("## Historias"));
+    for s in w.stories() {
+        assert!(text.contains(&s.title), "falta {}", s.title);
+    }
+}
+
+#[test]
+fn json_round_trip_keeps_causes() {
+    let w = world(2);
+    let back = World::from_json(&w.to_json().unwrap()).unwrap();
+    assert_eq!(back, w);
+}

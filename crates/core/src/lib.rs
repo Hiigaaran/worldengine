@@ -20,6 +20,7 @@ mod noise;
 pub mod query;
 pub mod rng;
 pub mod simulate;
+pub mod stories;
 
 pub use climate::{year_climate, YearClimate};
 pub use generate::{found, generate};
@@ -27,3 +28,4 @@ pub use ids::*;
 pub use legends::Chronicle;
 pub use model::*;
 pub use query::Subject;
+pub use stories::{Story, StoryKind};
