@@ -5,6 +5,8 @@ Todas las versiones de WorldEngine. El formato sigue
 
 ## [Sin publicar]
 
+## [0.2.0] - 2026-10-29
+
 ### Edades
 - Al generar un mundo se elige su edad: **Realista**, **Fantasía** o **Cyberpunk**. La misma semilla conserva la geografía y cambia todo lo demás.
 - Nombres con el sonido de cada edad: lugares como San Treder o Puerto Tiael; Rocadragón o Kal'dor; Neo Taronok, Sector 16 o Nymusako Industrias, y personajes con alias como Kai «Cromo».
@@ -62,4 +64,5 @@ generación de mundos y el modo Leyendas de Dwarf Fortress.
 - Modo Leyendas: una enciclopedia de países, localidades, personajes y guerras, con fichas enlazadas entre sí y con el mapa.
 - Exportar la crónica del mundo en Markdown y el mundo completo en JSON.
 
+[0.2.0]: https://github.com/Hiigaaran/worldengine/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Hiigaaran/worldengine/releases/tag/v0.1.0
