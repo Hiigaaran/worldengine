@@ -5,6 +5,8 @@ Todas las versiones de WorldEngine. El formato sigue
 
 ## [Sin publicar]
 
+## [0.3.0] - 2026-10-29
+
 ### Imágenes y mapa centrado
 - Retratos vectoriales de los personajes de interés, combinando el estilo de la edad (grabado sobre pergamino, cielo estrellado o neón), los atributos de su rol (corona, yelmo, capucha, sombrero de mago, visor de hacker...) y rasgos propios de cada personaje. Los muertos se ven en tonos apagados.
 - Cada tipo de evento y de historia tiene su dibujo: fundaciones, coronaciones, batallas, bodas, conjuras, pestes, cada calamidad y cada hazaña. Aparecen en la línea de tiempo, en las listas de Leyendas y en las fichas.
@@ -71,5 +73,6 @@ generación de mundos y el modo Leyendas de Dwarf Fortress.
 - Modo Leyendas: una enciclopedia de países, localidades, personajes y guerras, con fichas enlazadas entre sí y con el mapa.
 - Exportar la crónica del mundo en Markdown y el mundo completo en JSON.
 
+[0.3.0]: https://github.com/Hiigaaran/worldengine/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Hiigaaran/worldengine/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Hiigaaran/worldengine/releases/tag/v0.1.0
