@@ -77,28 +77,30 @@ pub fn word(rng: &mut Rng, age: Age, min_syllables: usize, max_syllables: usize)
     capitalize(&out)
 }
 
+/// Alias callejeros de la edad cyberpunk.
+pub(crate) const ALIASES: &[&str] = &[
+    "Cromo",
+    "Neón",
+    "Glitch",
+    "Cero",
+    "Chispa",
+    "Vudú",
+    "Kilo",
+    "Ceniza",
+    "Fantasma",
+    "Ruido",
+    "Byte",
+    "Lince",
+    "Óxido",
+    "Estática",
+    "Navaja",
+    "Píxel",
+];
+
 /// Nombre de pila. En cyberpunk muchos llevan un alias: Kai «Cromo».
 pub fn given(rng: &mut Rng, age: Age) -> String {
     let name = word(rng, age, 1, 2);
     if age == Age::Cyberpunk && rng.gen_bool(0.4) {
-        const ALIASES: &[&str] = &[
-            "Cromo",
-            "Neón",
-            "Glitch",
-            "Cero",
-            "Chispa",
-            "Vudú",
-            "Kilo",
-            "Ceniza",
-            "Fantasma",
-            "Ruido",
-            "Byte",
-            "Lince",
-            "Óxido",
-            "Estática",
-            "Navaja",
-            "Píxel",
-        ];
         return format!("{name} «{}»", ALIASES.choose(rng).unwrap());
     }
     name

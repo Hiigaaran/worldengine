@@ -1536,7 +1536,8 @@ fn independence(world: &mut World, rng: &mut Rng, locality: LocalityId, from: Co
     let year = world.year;
     let id = CountryId(world.countries.len() as u32);
     let government = random_government(rng);
-    let country = new_country(rng, world.config.age, id, locality, year, government);
+    let mut country = new_country(rng, world.config.age, id, locality, year, government);
+    country.people = crate::race::rebel_people(world, locality, from);
     world.countries.push(country);
     for other in 0..id.0 {
         let opinion = if CountryId(other) == from {

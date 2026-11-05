@@ -102,6 +102,25 @@ impl World {
             );
         }
 
+        if !self.races.is_empty() {
+            let _ = writeln!(out, "\n## {}\n", self.config.age.races_label());
+            for race in &self.races {
+                let _ = writeln!(out, "### {}\n", race.title());
+                let _ = writeln!(out, "{}\n", race.describe());
+                for custom in &race.customs {
+                    let _ = writeln!(out, "- **{}**: {}", custom.aspect, custom.text);
+                }
+                let words: Vec<String> = race
+                    .language
+                    .lexicon
+                    .iter()
+                    .map(|p| format!("_{}_ ({})", p.word, p.meaning))
+                    .collect();
+                let _ = writeln!(out, "- **Vocabulario**: {}.", words.join(", "));
+                let _ = writeln!(out, "\n> Prompt: {}", race.image_prompt(self.config.age));
+            }
+        }
+
         let _ = writeln!(out, "\n## Países\n");
         let mut countries: Vec<&Country> = self.countries.iter().collect();
         countries.sort_by_key(|c| (c.founded, c.id));
@@ -124,6 +143,9 @@ impl World {
                         .filter(|l| l.ruined.is_none())
                         .count()
                 );
+            }
+            if let Some(race) = c.people.map(|r| self.race(r)) {
+                let _ = writeln!(out, "Mayoría: {}.\n", race.title());
             }
             let rulers = self.rulers_of(c.id);
             if !rulers.is_empty() {
@@ -163,6 +185,20 @@ impl World {
                 let _ = writeln!(out);
             }
             let _ = writeln!(out);
+        }
+
+        // Quienes viven al final de la crónica, con su descripción completa.
+        let living: Vec<&Person> = self
+            .people
+            .iter()
+            .filter(|p| p.died.is_none() && p.race.is_some())
+            .collect();
+        if !living.is_empty() {
+            let _ = writeln!(out, "## Personajes de hoy\n");
+            for p in living {
+                let _ = writeln!(out, "### {}\n", p.name);
+                let _ = writeln!(out, "{}\n", self.describe_person(p.id));
+            }
         }
 
         let stories = self.stories();

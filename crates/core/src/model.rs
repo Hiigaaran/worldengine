@@ -244,6 +244,9 @@ pub struct Country {
     pub stability: f32,
     /// Año en que el país desapareció, si lo hizo.
     pub fell: Option<Year>,
+    /// La raza o el pueblo mayoritario.
+    #[serde(default)]
+    pub people: Option<RaceId>,
 }
 
 impl Country {
@@ -301,6 +304,9 @@ pub struct Person {
     /// Alguien a quien este personaje ha jurado vengar.
     #[serde(default)]
     pub grudge: Option<Grudge>,
+    /// Su raza o pueblo (ver [`crate::race`]).
+    #[serde(default)]
+    pub race: Option<RaceId>,
 }
 
 /// Una deuda de sangre: `against` mató a alguien cercano en el evento `since`.
@@ -560,6 +566,9 @@ pub struct World {
     pub map: WorldMap,
     pub regions: Vec<Region>,
     pub rivers: Vec<River>,
+    /// Razas o pueblos que habitan el mundo.
+    #[serde(default)]
+    pub races: Vec<crate::race::Race>,
     pub countries: Vec<Country>,
     pub localities: Vec<Locality>,
     pub people: Vec<Person>,
