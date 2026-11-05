@@ -17,6 +17,7 @@ use crate::geography;
 use crate::ids::*;
 use crate::model::*;
 use crate::names;
+use crate::race;
 use crate::rng::{Rng, WorldRng};
 use crate::simulate;
 
@@ -39,6 +40,7 @@ pub fn found(config: &WorldConfig) -> World {
         map: geography.map,
         regions: geography.regions,
         rivers: geography.rivers,
+        races: Vec::new(),
         countries: Vec::new(),
         localities: Vec::new(),
         people: Vec::new(),
@@ -48,6 +50,7 @@ pub fn found(config: &WorldConfig) -> World {
     };
     found_countries(&mut world, &mut rng.stream("countries"));
     found_villages(&mut world, &mut rng.stream("villages"));
+    race::populate(&mut world, &mut rng.stream("races"));
     create_people(&mut world, &mut rng.stream("people"));
     init_relations(&mut world, &mut rng.stream("relations"));
     sort_events(&mut world);
@@ -270,6 +273,7 @@ pub(crate) fn new_country(
         color,
         stability: 0.7,
         fell: None,
+        people: None,
     }
 }
 
@@ -415,7 +419,10 @@ pub(crate) fn add_person(
     parent: Option<PersonId>,
 ) -> PersonId {
     let id = PersonId(world.people.len() as u32);
-    // Los hijos heredan el apellido de su progenitor.
+    let race = race::race_for(world, id, country, parent);
+    let language = race.map(|r| &world.race(r).language);
+    // Los hijos heredan el apellido de su progenitor; los nombres suenan a la
+    // lengua de su raza.
     let name = match parent {
         Some(p) => {
             let family = world.people[p.index()]
@@ -424,9 +431,16 @@ pub(crate) fn add_person(
                 .next_back()
                 .unwrap_or("")
                 .to_string();
-            format!("{} {family}", names::given(rng, world.config.age))
+            let given = match language {
+                Some(l) => l.given(rng),
+                None => names::given(rng, world.config.age),
+            };
+            format!("{given} {family}")
         }
-        None => names::person(rng, world.config.age),
+        None => match language {
+            Some(l) => l.person(rng),
+            None => names::person(rng, world.config.age),
+        },
     };
     world.people.push(Person {
         id,
@@ -440,6 +454,7 @@ pub(crate) fn add_person(
         cause_of_death: None,
         spouse: None,
         grudge: None,
+        race,
     });
     id
 }

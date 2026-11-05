@@ -24,6 +24,7 @@ cargo run --release -p worldengine-app      # app visual
 cargo run -p worldengine-core --example summary -- Arda   # resumen en terminal
 cargo run -p worldengine-core --example chronicle -- Arda fantasia > cronica.md   # crónica
 cargo run -p worldengine-core --example stories -- Arda cyberpunk   # historias
+cargo run -p worldengine-core --example races -- Arda fantasia 6   # razas y personajes
 cargo test --workspace
 ```
 
@@ -56,6 +57,33 @@ contra quien la creó, los caídos de una guerra pueden alzarse, y un robo de
 datos puede acabar en guerra. A veces alguien vence a la calamidad (mata al
 dragón, desconecta a la IA) y queda en la historia.
 
+### Razas y pueblos
+
+Cada mundo genera sus razas según la edad: pueblos humanos de culturas
+distintas en la realista (ribereños, de la estepa, marineros, montañeses, del
+bosque, del desierto y del norte helado, con piel, pelo y ojos según el clima
+de su tierra); humanos, elfos, enanos, orcos, medianos y dracónidos en la de
+fantasía; naturales, aumentados, clones, sintéticos y mutantes en la
+cyberpunk. Cada mundo toma unos cuantos arquetipos y solo una parte de sus
+rasgos, así que los elfos de un mundo no son los de otro.
+
+- **Cuerpo**: estatura, longevidad, complexión, piel, pelo, ojos, rasgos y
+  vestimenta.
+- **Carácter**: temperamento y valores.
+- **Lengua propia**: sus sonidos, su nombre, un saludo, vocabulario y cómo se
+  ponen los nombres. Los personajes se llaman con los sonidos de su raza.
+- **Costumbres**: ritos de paso, matrimonio, funerales, cocina, creencias,
+  tabúes y escritura.
+
+Cada país tiene una raza mayoritaria (las provincias rebeldes pueden ser de
+otra) y cada personaje pertenece a una. De ella sale su perfil: género, edad
+aparente, estatura, rasgos, ropa y oficio, y su carácter. Con eso se escribe
+su descripción, se dibuja su retrato (orejas élficas, colmillos, escamas,
+implantes) y se arma un **prompt en inglés para IA generativa**. En la ficha de
+cada personaje, **Copiar prompt** y **Copiar JSON** (perfil estructurado,
+descripción y prompt) sirven para generar su imagen en cualquier herramienta.
+Los rasgos visibles se guardan en español, en inglés y con su color.
+
 ### Modo Leyendas
 
 - **Año mostrado**: el control deslizable de la línea de tiempo (y los botones
@@ -68,7 +96,8 @@ dragón, desconecta a la IA) y queda en la historia.
   las demás (gobernantes, progenitores, descendencia, batallas, conquistas) y
   cada hecho tiene un enlace a su año.
 - **Exportar crónica** guarda la historia completa en Markdown: geografía,
-  países con sus gobernantes, guerras y anales año por año.
+  razas, países con sus gobernantes, guerras, personajes vivos con su
+  descripción y anales año por año.
 
 ## Estructura
 
@@ -81,7 +110,7 @@ El modelo se organiza por capas de detalle:
 
 ```
 Mundo → Mapa (casillas: elevación, temperatura, lluvia, bioma, región, dueño)
-      → Regiones → Países → Localidades → Personajes → Eventos
+      → Regiones → Razas → Países → Localidades → Personajes → Eventos
 ```
 
 Todas las entidades se referencian por ids tipados (`RegionId`, `CountryId`, ...)

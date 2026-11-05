@@ -286,13 +286,13 @@ fn person_details(ui: &mut egui::Ui, world: &World, person: &Person, nav: &mut O
         Some(died) => format!(
             "{} ({}, {} – {died})",
             person.name,
-            person.role.name(world.config.age),
+            world.role_name(person.id),
             person.born
         ),
         None => format!(
             "{} ({}, {} años)",
             person.name,
-            person.role.name(world.config.age),
+            world.role_name(person.id),
             world.year - person.born
         ),
     };
@@ -301,8 +301,12 @@ fn person_details(ui: &mut egui::Ui, world: &World, person: &Person, nav: &mut O
             ui.add(image(art::portrait(world, person.id), 96.0));
             open(ui, Page::Person(person.id), nav);
         });
+        let description = world.describe_person(person.id);
+        if !description.is_empty() {
+            ui.label(description);
+        }
         if let Some(parent) = person.parent.map(|p| world.person(p)) {
-            ui.label(format!("Hijo de {}", parent.name));
+            ui.label(format!("Progenitor: {}", parent.name));
         }
         let children: Vec<&str> = world
             .children_of(person.id)

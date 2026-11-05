@@ -37,6 +37,8 @@ define_id!(
     EventId,
     /// Guerra entre dos países.
     WarId,
+    /// Raza o pueblo.
+    RaceId,
     /// Historia: un grupo de eventos enlazados por causa y consecuencia.
     StoryId,
 );

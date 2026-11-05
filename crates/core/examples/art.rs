@@ -25,10 +25,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for motif in Motif::all() {
         images.push((format!("{motif:?}").to_lowercase(), motif.svg(age)));
     }
-    // Un personaje de cada rol, vivo o muerto.
+    // Un personaje de cada raza y rol, vivo.
     let mut seen = Vec::new();
-    for person in &world.people {
-        let key = (person.role, person.died.is_some());
+    for person in world.people.iter().filter(|p| p.died.is_none()) {
+        let key = (person.race, person.role);
         if !seen.contains(&key) {
             seen.push(key);
             images.push((

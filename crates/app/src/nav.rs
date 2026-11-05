@@ -1,7 +1,9 @@
 //! Acciones de navegación que piden los paneles; la aplicación las aplica al
 //! final de cada cuadro.
 
-use worldengine_core::{CountryId, EventId, LocalityId, PersonId, Pos, StoryId, WarId, Year};
+use worldengine_core::{
+    CountryId, EventId, LocalityId, PersonId, Pos, RaceId, StoryId, WarId, Year,
+};
 
 /// Una ficha de la enciclopedia de Leyendas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9,6 +11,7 @@ pub enum Page {
     Country(CountryId),
     Locality(LocalityId),
     Person(PersonId),
+    Race(RaceId),
     War(WarId),
     Story(StoryId),
     Event(EventId),

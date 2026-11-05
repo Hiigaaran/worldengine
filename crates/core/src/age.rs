@@ -55,6 +55,15 @@ impl Age {
         }
     }
 
+    /// Cómo se llama a los pueblos del mundo: «Pueblos» en la edad realista,
+    /// donde todos son humanos; «Razas» en las demás.
+    pub fn races_label(self) -> &'static str {
+        match self {
+            Age::Realistic => "Pueblos",
+            Age::Fantasy | Age::Cyberpunk => "Razas",
+        }
+    }
+
     /// Cómo se llama un linaje gobernante, con artículo: «La Casa», «El Clan».
     pub fn house(self) -> &'static str {
         match self {
@@ -224,6 +233,30 @@ impl Role {
             (Age::Cyberpunk, Role::Merchant) => "Traficante",
             (Age::Cyberpunk, Role::Scholar) => "Hacker",
             (Age::Cyberpunk, Role::Adventurer) => "Mercenario",
+        }
+    }
+}
+
+impl Role {
+    /// El oficio concordado con el género: «Maga», «Sacerdotisa».
+    pub fn name_for(self, age: Age, gender: crate::race::Gender) -> &'static str {
+        let name = self.name(age);
+        if gender == crate::race::Gender::Male {
+            return name;
+        }
+        match name {
+            "Sacerdote" => "Sacerdotisa",
+            "Erudito" => "Erudita",
+            "Aventurero" => "Aventurera",
+            "Soberano" => "Soberana",
+            "Paladín" => "Paladina",
+            "Clérigo" => "Clériga",
+            "Mago" => "Maga",
+            "Director" => "Directora",
+            "Ejecutivo" => "Ejecutiva",
+            "Tecnochamán" => "Tecnochamana",
+            "Mercenario" => "Mercenaria",
+            other => other,
         }
     }
 }

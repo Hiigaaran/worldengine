@@ -5,6 +5,16 @@ Todas las versiones de WorldEngine. El formato sigue
 
 ## [Sin publicar]
 
+### Razas y pueblos
+- Cada mundo genera sus razas según la edad: siete culturas humanas en la realista (con piel, pelo y ojos según el clima de su tierra), humanos, elfos, enanos, orcos, medianos y dracónidos en fantasía, y naturales, aumentados, clones, sintéticos y mutantes en cyberpunk.
+- Cada raza tiene cuerpo (estatura, longevidad, complexión, piel, pelo, ojos, rasgos, vestimenta), carácter y valores, una lengua propia (nombre, saludo, vocabulario, costumbres de nombres) y costumbres: ritos de paso, matrimonio, funerales, cocina, creencias, tabúes y escritura.
+- Cada país tiene una raza mayoritaria; las provincias que se independizan toman la de sus habitantes. Los personajes pertenecen a una raza, heredan la de su progenitor y se llaman con los sonidos de su lengua.
+- La descripción de cada personaje incluye su raza, edad aparente, aspecto, ropa, oficio, carácter y lengua, y su oficio concuerda con su género (maga, sacerdotisa, directora...).
+- Los retratos vectoriales siguen a la raza: color de piel y pelo, orejas puntiagudas, colmillos, escamas y cuernos, ojos cibernéticos y costuras de androide.
+- Prompt en inglés para IA generativa y perfil estructurado en JSON, para copiar desde la ficha del personaje o de la raza.
+- Nueva categoría «Razas» («Pueblos» en la edad realista) en Leyendas, con su ficha; la crónica en Markdown incluye las razas y a los personajes vivos con su descripción.
+- El ejemplo `races` muestra las razas y algunos personajes de un mundo.
+
 ## [0.3.0] - 2026-10-29
 
 ### Imágenes y mapa centrado

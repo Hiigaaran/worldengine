@@ -22,21 +22,24 @@ enum Category {
     Countries,
     Localities,
     People,
+    Races,
     Wars,
     Stories,
 }
 
 impl Category {
-    const ALL: [Category; 5] = [
+    const ALL: [Category; 6] = [
         Category::Stories,
         Category::Countries,
         Category::Localities,
         Category::People,
+        Category::Races,
         Category::Wars,
     ];
 
-    fn label(self) -> &'static str {
+    fn label(self, age: Age) -> &'static str {
         match self {
+            Category::Races => age.races_label(),
             Category::Countries => "Países",
             Category::Localities => "Localidades",
             Category::People => "Personajes",
@@ -116,6 +119,7 @@ impl Legends {
                     Page::Country(id) => country_page(ui, world, stories, id, &mut nav),
                     Page::Locality(id) => locality_page(ui, world, stories, id, &mut nav),
                     Page::Person(id) => person_page(ui, world, stories, id, &mut nav),
+                    Page::Race(id) => race_page(ui, world, id, &mut nav),
                     Page::War(id) => war_page(ui, world, stories, id, &mut nav),
                     Page::Story(id) => story_page(ui, world, stories, id, &mut nav),
                     Page::Event(id) => event_page(ui, world, stories, id, &mut nav),
@@ -149,7 +153,7 @@ impl Legends {
         ui.horizontal_wrapped(|ui| {
             for category in Category::ALL {
                 if ui
-                    .selectable_label(self.category == category, category.label())
+                    .selectable_label(self.category == category, category.label(world.config.age))
                     .clicked()
                 {
                     self.category = category;
@@ -221,12 +225,18 @@ impl Legends {
                         format!(
                             "{}, {} ({} – {died})",
                             p.name,
-                            p.role.name(world.config.age).to_lowercase(),
+                            world.role_name(p.id).to_lowercase(),
                             p.born
                         ),
                         Page::Person(p.id),
                     )
                 })
+                .collect(),
+            Category::Races => world
+                .races
+                .iter()
+                .filter(|r| matches(&r.name) || matches(&r.endonym))
+                .map(|r| (r.title(), Page::Race(r.id)))
                 .collect(),
             Category::Wars => world
                 .wars
@@ -603,6 +613,12 @@ fn country_page(
         });
         ui.label(format!("Territorio: {} casillas", world.territory_size(id)));
     }
+    if let Some(race) = country.people.map(|r| world.race(r)) {
+        ui.horizontal(|ui| {
+            ui.label(format!("{} mayoritario:", singular(world.config.age)));
+            page_link(ui, race.title(), Page::Race(race.id), nav);
+        });
+    }
 
     ui.collapsing("Gobernantes", |ui| {
         for (year, person) in world.rulers_of(id) {
@@ -716,7 +732,7 @@ fn person_page(
     };
     let svg = art::portrait(world, id);
     picture_header(ui, svg.clone(), &person.name, |ui| {
-        ui.label(format!("{} · {life}", person.role.name(world.config.age)));
+        ui.label(format!("{} · {life}", world.role_name(id)));
         if ui.small_button("Ver en el mapa").clicked() {
             *nav = Some(Nav::GoTo(world.locality(person.home).pos));
         }
@@ -731,6 +747,31 @@ fn person_page(
             nav,
         );
     });
+    if let Some(race) = person.race.map(|r| world.race(r)) {
+        ui.horizontal(|ui| {
+            ui.label(format!("{}:", singular(world.config.age)));
+            page_link(ui, race.title(), Page::Race(race.id), nav);
+        });
+        ui.add_space(4.0);
+        let description = world.describe_person(id);
+        ui.label(&description);
+        ui.horizontal_wrapped(|ui| {
+            copy_button(ui, "Copiar descripción", description, "Copia el texto de la descripción");
+            copy_button(
+                ui,
+                "Copiar prompt",
+                world.image_prompt(id),
+                "Copia un prompt en inglés para generar su retrato con IA",
+            );
+            copy_button(
+                ui,
+                "Copiar JSON",
+                world.image_json(id),
+                "Copia su perfil estructurado (aspecto, carácter, raza), la descripción y el prompt",
+            );
+        });
+        ui.add_space(4.0);
+    }
     if let Some(c) = person.country {
         ui.horizontal(|ui| {
             ui.label("País:");
@@ -835,4 +876,141 @@ fn war_page(
     ui.separator();
     ui.strong("Batallas y hechos");
     events(ui, world, world.events_about(Subject::War(id)), nav);
+}
+
+/// «Pueblo» o «Raza», para etiquetas.
+fn singular(age: Age) -> &'static str {
+    match age {
+        Age::Realistic => "Pueblo",
+        _ => "Raza",
+    }
+}
+
+/// Botón que copia un texto al portapapeles.
+fn copy_button(ui: &mut egui::Ui, label: &str, text: String, hint: &str) {
+    if ui.small_button(label).on_hover_text(hint).clicked() {
+        ui.ctx().copy_text(text);
+    }
+}
+
+fn race_page(
+    ui: &mut egui::Ui,
+    world: &World,
+    id: worldengine_core::RaceId,
+    nav: &mut Option<Nav>,
+) {
+    let race = world.race(id);
+    let age = world.config.age;
+    // La imagen de la raza es el retrato de uno de sus miembros vivos.
+    let model = world
+        .members_of(id)
+        .find(|p| p.died.is_none())
+        .or_else(|| world.members_of(id).next());
+    let subtitle = if race.kind.is_culture() {
+        race.kind.name().to_string()
+    } else {
+        format!("Se llaman a sí mismos {}", race.endonym)
+    };
+    let header = |ui: &mut egui::Ui| {
+        ui.label(&subtitle);
+        if race.stateless {
+            ui.label(RichText::new("Sin país propio al comenzar la historia").weak());
+        }
+        copy_button(
+            ui,
+            "Copiar prompt",
+            race.image_prompt(age),
+            "Copia un prompt en inglés para generar una imagen de esta raza con IA",
+        );
+    };
+    match model {
+        Some(p) => picture_header(ui, art::portrait(world, p.id), &race.name, header),
+        None => {
+            ui.heading(&race.name);
+            header(ui);
+        }
+    }
+    if let Some(region) = race.homeland {
+        ui.horizontal(|ui| {
+            ui.label("Tierra de origen:");
+            let region = world.region(region);
+            if ui.link(&region.name).clicked() {
+                *nav = Some(Nav::GoTo(region.center));
+            }
+        });
+    }
+    ui.separator();
+    ui.strong("Cuerpo");
+    let list = |v: &[worldengine_core::Trait]| {
+        v.iter()
+            .map(|t| t.es.as_str())
+            .collect::<Vec<_>>()
+            .join(" · ")
+    };
+    let mut row = |name: &str, value: String| {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(format!("{name}:")).weak());
+            ui.label(value);
+        });
+    };
+    row(
+        "Estatura",
+        format!("{} – {} cm", race.height_cm[0], race.height_cm[1]),
+    );
+    row("Longevidad", format!("unos {} años", race.lifespan));
+    row("Complexión", list(&race.builds));
+    row("Piel", list(&race.skins));
+    row("Pelo", list(&race.hair));
+    row("Ojos", list(&race.eyes));
+    row("Rasgos", list(&race.features));
+    row("Vestimenta", list(&race.attire));
+    ui.separator();
+    ui.strong("Carácter");
+    ui.label(format!(
+        "Se les conoce por su {}.",
+        race.temperament.join(", su ")
+    ));
+    ui.label(format!("Valoran {}.", race.values.join(" y ")));
+    ui.separator();
+    ui.strong(format!("Lengua: {}", race.language.name));
+    ui.label(format!(
+        "Saludo: «{}» («{}»)",
+        race.language.greeting.word, race.language.greeting.meaning
+    ));
+    ui.label(format!("Nombres: {}", race.language.naming));
+    let words: Vec<String> = race
+        .language
+        .lexicon
+        .iter()
+        .map(|p| format!("{} ({})", p.word, p.meaning))
+        .collect();
+    ui.label(format!("Vocabulario: {}", words.join(", ")));
+    ui.separator();
+    ui.strong("Costumbres");
+    for custom in &race.customs {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(format!("{}:", custom.aspect)).weak());
+            ui.label(&custom.text);
+        });
+    }
+    ui.separator();
+    ui.collapsing("Países donde son mayoría", |ui| {
+        for c in world.homelands_of(id) {
+            page_link(ui, &c.name, Page::Country(c.id), nav);
+        }
+    });
+    ui.collapsing(
+        format!("Personajes ({})", world.members_of(id).count()),
+        |ui| {
+            for p in world.members_of(id) {
+                let died = p.died.map_or(String::new(), |d| d.to_string());
+                page_link(
+                    ui,
+                    format!("{} ({} – {died})", p.name, p.born),
+                    Page::Person(p.id),
+                    nav,
+                );
+            }
+        },
+    );
 }

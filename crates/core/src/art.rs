@@ -364,18 +364,40 @@ pub fn portrait(world: &World, id: PersonId) -> String {
         let text = format!("{}-{}-{salt}", world.config.seed, id.index());
         fnv1a(text.as_bytes()) as usize
     };
-    let skin = SKINS[trait_of("piel") % SKINS.len()];
+    // Con raza, el color de piel y pelo, el corte y la barba salen de su
+    // perfil; sin ella (mundos antiguos), del azar de su id.
+    let profile = world.profile(id);
+    let marks = profile.as_ref().map(|p| p.marks).unwrap_or_default();
+    let color = |t: &crate::race::Trait| t.color.clone();
+    let skin = profile
+        .as_ref()
+        .and_then(|p| color(&p.skin))
+        .unwrap_or_else(|| SKINS[trait_of("piel") % SKINS.len()].to_string());
     let pick = trait_of("pelo");
-    let hair = match age {
-        Age::Fantasy if pick % 4 == 0 => FANTASY_HAIR[pick / 4 % FANTASY_HAIR.len()],
-        Age::Cyberpunk if pick % 3 == 0 => NEON_HAIR[pick / 3 % NEON_HAIR.len()],
-        _ => HAIR[pick % HAIR.len()],
-    };
+    let hair = profile
+        .as_ref()
+        .and_then(|p| color(&p.hair))
+        .unwrap_or_else(|| {
+            match age {
+                Age::Fantasy if pick % 4 == 0 => FANTASY_HAIR[pick / 4 % FANTASY_HAIR.len()],
+                Age::Cyberpunk if pick % 3 == 0 => NEON_HAIR[pick / 3 % NEON_HAIR.len()],
+                _ => HAIR[pick % HAIR.len()],
+            }
+            .to_string()
+        });
     let role = person.role;
     let wizard = age == Age::Fantasy && role == Role::Scholar;
     let mohawk = age == Age::Cyberpunk && role == Role::Adventurer;
-    let style = if mohawk { 2 } else { trait_of("peinado") % 4 };
-    let beard = wizard || trait_of("barba") % 3 == 0;
+    let style = match &profile {
+        _ if mohawk => 2,
+        Some(_) if marks.hairless => 4,
+        Some(p) => p.cut,
+        None => (trait_of("peinado") % 4) as u8,
+    };
+    let beard = match &profile {
+        Some(p) => p.beard,
+        None => wizard || trait_of("barba") % 3 == 0,
+    };
     let attire = attire(age, role);
     let ink = p.ink;
 
@@ -394,20 +416,55 @@ pub fn portrait(world: &World, id: PersonId) -> String {
         b,
         r##"<path d="M56 74 L56 90 Q64 95 72 90 L72 74 Z" fill="{skin}" stroke="{ink}" stroke-width="1.5"/>"##
     );
-    for x in [41, 87] {
+    if marks.pointed_ears {
         put!(
             b,
-            r##"<ellipse cx="{x}" cy="60" rx="4" ry="6" fill="{skin}" stroke="{ink}" stroke-width="1.5"/>"##
+            r##"<path d="M44 56 L30 40 L42 66 Z M84 56 L98 40 L86 66 Z" fill="{skin}" stroke="{ink}" stroke-width="1.5" stroke-linejoin="round"/>"##
+        );
+    } else {
+        for x in [41, 87] {
+            put!(
+                b,
+                r##"<ellipse cx="{x}" cy="60" rx="4" ry="6" fill="{skin}" stroke="{ink}" stroke-width="1.5"/>"##
+            );
+        }
+    }
+    if marks.horns {
+        put!(
+            b,
+            r##"<path d="M48 40 C42 30 40 22 44 14 C48 24 52 30 56 36 Z M80 40 C86 30 88 22 84 14 C80 24 76 30 72 36 Z" fill="{}" stroke="{ink}" stroke-width="1.5"/>"##,
+            p.light
         );
     }
     put!(
         b,
         r##"<ellipse cx="64" cy="58" rx="23" ry="25" fill="{skin}" stroke="{ink}" stroke-width="2"/>"##
     );
+    if marks.scales {
+        for (x, y) in [(50, 66), (56, 70), (76, 66), (70, 70), (60, 44), (68, 44)] {
+            put!(
+                b,
+                r##"<path d="M{x} {y} q3 -3 6 0" fill="none" stroke="{ink}" stroke-opacity="0.45" stroke-width="1"/>"##
+            );
+        }
+    }
+    if marks.synthetic {
+        put!(
+            b,
+            r##"<path d="M44 62 L52 64 L52 76 M84 62 L76 64 L76 76" fill="none" stroke="{ink}" stroke-opacity="0.5" stroke-width="1"/><circle cx="84" cy="50" r="2" fill="{}"/>"##,
+            p.accent2
+        );
+    }
     put!(
         b,
         r##"<circle cx="55" cy="58" r="2.6" fill="{ink}"/><circle cx="73" cy="58" r="2.6" fill="{ink}"/>"##
     );
+    if marks.cyber_eye {
+        put!(
+            b,
+            r##"<circle cx="73" cy="58" r="5" fill="#d11" fill-opacity="0.85" stroke="{ink}" stroke-width="1.5"/><circle cx="73" cy="58" r="1.6" fill="#ffd0d0"/><path d="M78 58 L86 58" stroke="{ink}" stroke-width="1.2"/>"##
+        );
+    }
     put!(
         b,
         r##"<path d="M50 52 L59 51 M69 51 L78 52" stroke="{ink}" stroke-width="2" stroke-linecap="round"/>"##
@@ -431,7 +488,14 @@ pub fn portrait(world: &World, id: PersonId) -> String {
         b,
         r##"<path d="M58 73 Q64 76 70 73" fill="none" stroke="#2a1410" stroke-width="1.6" stroke-linecap="round"/>"##
     );
+    if marks.tusks {
+        b += r##"<path d="M58 75 L57 68 L61 74 Z M70 75 L71 68 L67 74 Z" fill="#f4efe0" stroke="#2a1410" stroke-width="1"/>"##;
+    }
     match style {
+        4 => put!(
+            b,
+            r##"<path d="M60 34 L64 22 L68 34 L72 26 L72 40 L56 40 L56 26 Z" fill="{hair}" stroke="{ink}" stroke-width="1.5" stroke-linejoin="round"/>"##
+        ),
         2 => put!(
             b,
             r##"<path d="M41 64 C40 54 42 48 46 46 L45 62 Z M87 64 C88 54 86 48 82 46 L83 62 Z" fill="{hair}" stroke="{ink}" stroke-width="1"/>"##
